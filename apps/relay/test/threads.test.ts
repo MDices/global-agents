@@ -104,7 +104,7 @@ describe("ThreadRegistry.ensureThread", () => {
     expect(port.of("createThread")).toHaveLength(0);
     // o estado conhecido vem do banco: setState("working") não renomeia
     reg.setState("th-old", "working");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(port.of("renameThread")).toHaveLength(0);
   });
 
@@ -117,7 +117,7 @@ describe("ThreadRegistry.ensureThread", () => {
 });
 
 describe("ThreadRegistry.setState", () => {
-  it("5 chamadas em 1 s geram 1 rename imediato e 1 após 30 s com o último estado", async () => {
+  it("5 chamadas em 1 s geram 1 rename imediato e 1 após 300 s com o último estado", async () => {
     const id = await reg.ensureThread(M, S);
     reg.setState(id, "working");
     await vi.advanceTimersByTimeAsync(200);
@@ -131,21 +131,56 @@ describe("ThreadRegistry.setState", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId: id, name: "🟢 correcoes-bugs" }]);
 
-    await vi.advanceTimersByTimeAsync(28_999);
+    await vi.advanceTimersByTimeAsync(298_999);
     expect(port.of("renameThread")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(port.of("renameThread")).toEqual([
       { op: "renameThread", threadId: id, name: "🟢 correcoes-bugs" },
       { op: "renameThread", threadId: id, name: "🟡 correcoes-bugs" },
     ]);
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(1_200_000);
     expect(port.of("renameThread")).toHaveLength(2);
+  });
+
+  it("20 mudanças em 10 min com rename lento: no máximo 1 em voo e ≤ 3 chamadas, a última com o estado final", async () => {
+    const id = await reg.ensureThread(M, S);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const names: string[] = [];
+    port.renameThread = vi.fn(async (_t: string, name: string) => {
+      names.push(name);
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      await new Promise((r) => setTimeout(r, 90_000));
+      inFlight--;
+    });
+    const states = ["working", "waiting"] as const;
+    for (let i = 0; i < 20; i++) {
+      reg.setState(id, states[i % 2]!);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    expect(maxInFlight).toBe(1);
+    expect(names.length).toBeGreaterThanOrEqual(2);
+    expect(names.length).toBeLessThanOrEqual(3);
+    expect(names.at(-1)).toBe("🟡 correcoes-bugs"); // estado final da sequência (i = 19)
+  });
+
+  it("depois de um erro, tenta de novo só após o intervalo", async () => {
+    const id = await reg.ensureThread(M, S);
+    const rename = vi.fn().mockRejectedValueOnce(new Error("500")).mockResolvedValue(undefined);
+    port.renameThread = rename;
+    reg.setState(id, "working");
+    await vi.advanceTimersByTimeAsync(299_000);
+    expect(rename).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(rename).toHaveBeenLastCalledWith(id, "🟢 correcoes-bugs");
   });
 
   it("estado igual ao aplicado não renomeia", async () => {
     const id = await reg.ensureThread(M, S);
     reg.setState(id, "done");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(port.of("renameThread")).toHaveLength(0);
   });
 
@@ -154,14 +189,14 @@ describe("ThreadRegistry.setState", () => {
     reg.setState(id, "working");
     reg.setState(id, "waiting");
     reg.setState(id, "working");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(port.of("renameThread")).toHaveLength(1);
   });
 
   it("depois que a janela abre, o próximo estado renomeia na hora", async () => {
     const id = await reg.ensureThread(M, S);
     reg.setState(id, "working");
-    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(301_000);
     reg.setState(id, "done");
     await vi.advanceTimersByTimeAsync(0);
     expect(port.of("renameThread").map((c) => c.name)).toEqual(["🟢 correcoes-bugs", "⚪ correcoes-bugs"]);
@@ -169,7 +204,7 @@ describe("ThreadRegistry.setState", () => {
 
   it("thread desconhecida é ignorada", async () => {
     reg.setState("th-nada", "working");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(port.of("renameThread")).toHaveLength(0);
   });
 
@@ -186,21 +221,21 @@ describe("ThreadRegistry.rename", () => {
   it("muda o nome mantendo o emoji atual, sem criar thread nova", async () => {
     const id = await reg.ensureThread(M, S);
     reg.setState(id, "waiting");
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     reg.rename("s1", "bugs-faturamento");
     await vi.advanceTimersByTimeAsync(0);
     expect(port.of("renameThread").at(-1)).toEqual({ op: "renameThread", threadId: id, name: "🟡 bugs-faturamento" });
     expect(port.of("createThread")).toHaveLength(1);
   });
 
-  it("respeita a janela de 30 s e se combina com o estado mais recente", async () => {
+  it("respeita o intervalo de 300 s e se combina com o estado mais recente", async () => {
     const id = await reg.ensureThread(M, S);
     reg.setState(id, "working");
     reg.rename("s1", "novo-nome");
     reg.setState(id, "done");
     await vi.advanceTimersByTimeAsync(0);
     expect(port.of("renameThread")).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(port.of("renameThread").map((c) => c.name)).toEqual(["🟢 correcoes-bugs", "⚪ novo-nome"]);
   });
 
@@ -208,7 +243,7 @@ describe("ThreadRegistry.rename", () => {
     await reg.ensureThread(M, S);
     reg.rename("s1", "correcoes-bugs");
     reg.rename("s-inexistente", "x");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(port.of("renameThread")).toHaveLength(0);
     expect(port.of("createThread")).toHaveLength(1);
   });

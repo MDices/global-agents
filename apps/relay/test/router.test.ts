@@ -237,8 +237,44 @@ describe("online/offline", () => {
     expect(port.of("editChannelTopic")[0]?.topic).toContain("offline");
     hub.emit("online", M);
     await settle();
+    expect(port.of("editChannelTopic")).toHaveLength(1); // intervalo mínimo de 300 s entre edições
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(port.of("editChannelTopic")[1]).toEqual({ op: "editChannelTopic", channelId: "ch-1", topic: TOPIC });
     expect(port.of("post")).toHaveLength(0);
+  });
+
+  it("hello com tópico igual ao do canal não edita o tópico", async () => {
+    emit(hello());
+    await settle();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(port.of("editChannelTopic")).toHaveLength(0);
+  });
+
+  it("edição de tópico travada não segura as mensagens: hello seguido de turn.reply posta", async () => {
+    port.presetChannel("fedora-leonardo", "tópico velho");
+    port.topicEdit = () => new Promise<void>(() => { /* nunca resolve (rate limit esgotado) */ });
+    emit(hello());
+    emit(ev("turn.reply", { sessionId: "s1", text: "pronto" }));
+    await settle();
+    expect(port.of("editChannelTopic")).toEqual([{ op: "editChannelTopic", channelId: "ch-1", topic: TOPIC }]);
+    expect(postsTo(threadOf("s1"))).toEqual(["pronto"]);
+  });
+
+  it("5 ciclos offline/online: no máximo 1 edição em voo e o último valor aplicado é o de online", async () => {
+    emit(hello());
+    await settle();
+    port.topicEdit = () => new Promise<void>((r) => setTimeout(r, 90_000));
+    for (let i = 0; i < 5; i++) {
+      hub.emit("offline", M);
+      await vi.advanceTimersByTimeAsync(20_000);
+      hub.emit("online", M);
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    const edits = port.of("editChannelTopic");
+    expect(port.maxTopicsInFlight).toBe(1);
+    expect(edits.length).toBeLessThanOrEqual(2);
+    expect(edits.at(-1)?.topic).toBe(TOPIC);
   });
 
   it("máquina sem canal ainda: online/offline não fazem nada", async () => {

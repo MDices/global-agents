@@ -32,8 +32,11 @@ export interface EmbedSpec {
  * rede (`FakeDiscordPort` nos testes). Esperas de rate limit (`Retry-After`) são do discord.js, que enfileira por rota.
  */
 export interface DiscordPort {
-  /** Acha (ou cria) o canal de texto `name` na categoria do relay; atualiza o tópico se diferente. */
-  ensureChannel(name: string, topic: string): Promise<{ channelId: string }>;
+  /**
+   * Acha (ou cria, com `topic`) o canal de texto `name` na categoria do relay. Nunca edita o tópico de um canal
+   * existente (edição de canal tem rate limit apertado; isso fica com `editChannelTopic`). Devolve o tópico atual.
+   */
+  ensureChannel(name: string, topic: string): Promise<{ channelId: string; topic: string | null }>;
   /** Cria uma thread pública no canal (arquivamento automático em 1 semana). */
   createThread(channelId: string, name: string): Promise<{ threadId: string }>;
   renameThread(threadId: string, name: string): Promise<void>;
@@ -68,19 +71,16 @@ export class DiscordJsPort implements DiscordPort {
     private readonly categoryName: string,
   ) {}
 
-  async ensureChannel(name: string, topic: string): Promise<{ channelId: string }> {
+  async ensureChannel(name: string, topic: string): Promise<{ channelId: string; topic: string | null }> {
     const guild = await this.client.guilds.fetch(this.guildId);
     const category = await this.ensureCategory(guild);
     const channels = await guild.channels.fetch();
     const existing = channels.find(
       (c): c is TextChannel => c !== null && c.type === ChannelType.GuildText && c.name === name && c.parentId === category.id,
     );
-    if (existing !== undefined) {
-      if (existing.topic !== topic) await existing.setTopic(topic);
-      return { channelId: existing.id };
-    }
+    if (existing !== undefined) return { channelId: existing.id, topic: existing.topic };
     const created = await guild.channels.create({ name, type: ChannelType.GuildText, parent: category.id, topic });
-    return { channelId: created.id };
+    return { channelId: created.id, topic: created.topic };
   }
 
   async createThread(channelId: string, name: string): Promise<{ threadId: string }> {

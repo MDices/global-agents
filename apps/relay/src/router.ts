@@ -3,7 +3,7 @@ import type { AgentEvent, SessionInfo, SessionState } from "@global-agents/proto
 import type { Db } from "./db.js";
 import type { DiscordPort } from "./discord/bot.js";
 import { chunkText } from "./discord/chunk.js";
-import { parseState, truncate, type ThreadRegistry, type ThreadSession } from "./discord/threads.js";
+import { LatestOnlyUpdater, parseState, truncate, type ThreadRegistry, type ThreadSession } from "./discord/threads.js";
 import type { AgentHubEvents } from "./ws/server.js";
 
 type Log = (msg: string) => void;
@@ -87,9 +87,10 @@ export interface Router {
 
 /**
  * Liga os eventos do hub ao Discord. Os eventos de cada máquina são processados em série (ordem garantida: thread
- * antes do post, fatias em sequência); mudanças de tópico (online/offline) andam numa fila própria por máquina, para
- * que o rate limit de edição de canal do Discord não segure as mensagens. Erros vão para `log`, nunca derrubam o
- * processo nem travam a fila.
+ * antes do post, fatias em sequência). Edição de tópico nunca é aguardada no caminho dos eventos: `hello`, `online`
+ * e `offline` só atualizam o tópico desejado de um `LatestOnlyUpdater` por canal (no máximo 1 edição em voo,
+ * intervalo mínimo de 300 s, só o último valor aplicado). Erros vão para `log`, nunca derrubam o processo nem
+ * travam a fila.
  */
 export function createRouter(deps: RouterDeps): Router {
   const { db, port, threads, hub } = deps;
@@ -97,6 +98,7 @@ export function createRouter(deps: RouterDeps): Router {
   const channelFor = machineChannelResolver(db, port);
   const projects = new Map<string, string[]>();
   const queues = new Map<string, Promise<void>>();
+  const topics = new LatestOnlyUpdater((channelId, topic) => port.editChannelTopic(channelId, topic), log);
 
   const enqueue = (key: string, label: string, fn: () => Promise<void>): void => {
     const prev = queues.get(key) ?? Promise.resolve();
@@ -130,8 +132,11 @@ export function createRouter(deps: RouterDeps): Router {
       ...(e.claudeAccount !== undefined ? { claudeAccount: e.claudeAccount } : {}),
     });
     projects.set(machine, [...e.projects]);
-    const { channelId } = await port.ensureChannel(channelName(machine), machineTopic(db, machine));
+    const desired = machineTopic(db, machine);
+    const { channelId, topic } = await port.ensureChannel(channelName(machine), desired);
     db.machines.setChannel(machine, channelId);
+    topics.seed(channelId, topic);
+    topics.set(channelId, desired);
   };
 
   const onSessionList = async (machine: string, e: EventOf<"session.list">): Promise<void> => {
@@ -186,15 +191,10 @@ export function createRouter(deps: RouterDeps): Router {
   };
 
   const setTopic = (machine: string, offline: boolean): void => {
-    enqueue(`topic:${machine}`, `${machine}: tópico`, async () => {
-      const channelId = db.machines.getByName(machine)?.channelId;
-      if (channelId == null) return; // máquina ainda sem canal: o hello cria com o tópico certo
-      const topic = machineTopic(db, machine);
-      await port.editChannelTopic(
-        channelId,
-        offline ? truncate(`🔴 máquina offline desde ${hhmm(new Date())} · ${topic}`, TOPIC_MAX) : topic,
-      );
-    });
+    const channelId = db.machines.getByName(machine)?.channelId;
+    if (channelId == null) return; // máquina ainda sem canal: o hello cria com o tópico certo
+    const topic = machineTopic(db, machine);
+    topics.set(channelId, offline ? truncate(`🔴 máquina offline desde ${hhmm(new Date())} · ${topic}`, TOPIC_MAX) : topic);
   };
 
   const onEvent = (machine: string, e: AgentEvent): void => {
@@ -213,6 +213,7 @@ export function createRouter(deps: RouterDeps): Router {
       while (queues.size > 0) await Promise.all(queues.values());
     },
     dispose() {
+      topics.dispose();
       hub.off("event", onEvent);
       hub.off("online", onOnline);
       hub.off("offline", onOffline);

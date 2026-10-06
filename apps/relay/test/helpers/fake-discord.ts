@@ -13,6 +13,11 @@ export class FakeDiscordPort implements DiscordPort {
   readonly calls: FakeCall[] = [];
   private seq = 0;
   private readonly channels = new Map<string, string>();
+  private readonly topics = new Map<string, string>();
+  /** Implementação de `editChannelTopic` trocável nos testes (ex.: nunca resolve, demora). */
+  topicEdit: (channelId: string, topic: string) => Promise<void> = async () => {};
+  private topicsInFlight = 0;
+  maxTopicsInFlight = 0;
   /** Atraso artificial de `createThread`, para simular concorrência. */
   createDelayMs = 0;
 
@@ -20,14 +25,23 @@ export class FakeDiscordPort implements DiscordPort {
     return this.calls.filter((c): c is Extract<FakeCall, { op: K }> => c.op === op);
   }
 
-  async ensureChannel(name: string, topic: string): Promise<{ channelId: string }> {
+  /** Simula um canal que já existe no servidor com outro tópico. */
+  presetChannel(name: string, topic: string): string {
+    const id = `ch-${++this.seq}`;
+    this.channels.set(name, id);
+    this.topics.set(id, topic);
+    return id;
+  }
+
+  async ensureChannel(name: string, topic: string): Promise<{ channelId: string; topic: string | null }> {
     this.calls.push({ op: "ensureChannel", name, topic });
     let id = this.channels.get(name);
     if (id === undefined) {
       id = `ch-${++this.seq}`;
       this.channels.set(name, id);
+      this.topics.set(id, topic);
     }
-    return { channelId: id };
+    return { channelId: id, topic: this.topics.get(id) ?? null };
   }
 
   async createThread(channelId: string, name: string): Promise<{ threadId: string }> {
@@ -53,5 +67,12 @@ export class FakeDiscordPort implements DiscordPort {
 
   async editChannelTopic(channelId: string, topic: string): Promise<void> {
     this.calls.push({ op: "editChannelTopic", channelId, topic });
+    this.maxTopicsInFlight = Math.max(this.maxTopicsInFlight, ++this.topicsInFlight);
+    try {
+      await this.topicEdit(channelId, topic);
+      this.topics.set(channelId, topic);
+    } finally {
+      this.topicsInFlight--;
+    }
   }
 }

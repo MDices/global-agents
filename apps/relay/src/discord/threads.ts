@@ -10,7 +10,8 @@ const STATE_LABEL: Record<SessionState, string> = {
   error: "🔴 erro",
 };
 const THREAD_NAME_MAX = 100;
-const RENAME_WINDOW_MS = 30_000;
+/** Intervalo mínimo entre duas edições do mesmo canal/thread (o Discord aceita ~2 a cada 10 min). */
+export const CHANNEL_EDIT_INTERVAL_MS = 300_000;
 
 /** Corta em `max` code units sem deixar meio par substituto no fim. */
 export function truncate(text: string, max: number): string {
@@ -28,6 +29,77 @@ export function threadName(name: string, state: SessionState): string {
 export function parseState(raw: string | null | undefined): SessionState | undefined {
   const r = SessionStateSchema.safeParse(raw);
   return r.success ? r.data : undefined;
+}
+
+interface UpdaterSlot {
+  desired: string | undefined;
+  applied: string | undefined;
+  inflight: boolean;
+  lastStart: number;
+  timer: NodeJS.Timeout | undefined;
+}
+
+/**
+ * Aplica valores (nome de thread, tópico de canal) por chave sem acumular fila no Discord: no máximo **uma**
+ * chamada em andamento por chave, intervalo mínimo entre inícios, e só o último valor desejado é aplicado. Quando
+ * a chamada em voo termina (sucesso ou erro) e o desejado ainda difere do aplicado, agenda a próxima.
+ */
+export class LatestOnlyUpdater {
+  private readonly slots = new Map<string, UpdaterSlot>();
+  private disposed = false;
+
+  constructor(
+    private readonly apply: (key: string, value: string) => Promise<void>,
+    private readonly log: (msg: string) => void,
+    private readonly intervalMs = CHANNEL_EDIT_INTERVAL_MS,
+  ) {}
+
+  /** Informa o valor que já está no Discord (sem chamada), se a chave ainda não tem estado. */
+  seed(key: string, applied: string | null): void {
+    if (applied === null || this.slots.has(key)) return;
+    this.slots.set(key, { desired: applied, applied, inflight: false, lastStart: Number.NEGATIVE_INFINITY, timer: undefined });
+  }
+
+  set(key: string, value: string): void {
+    let slot = this.slots.get(key);
+    if (slot === undefined) {
+      slot = { desired: undefined, applied: undefined, inflight: false, lastStart: Number.NEGATIVE_INFINITY, timer: undefined };
+      this.slots.set(key, slot);
+    }
+    slot.desired = value;
+    this.pump(slot, key);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const slot of this.slots.values()) {
+      if (slot.timer !== undefined) clearTimeout(slot.timer);
+      slot.timer = undefined;
+    }
+  }
+
+  private pump(slot: UpdaterSlot, key: string): void {
+    if (this.disposed || slot.inflight) return; // ao terminar, a chamada em voo chama pump de novo
+    if (slot.desired === undefined || slot.desired === slot.applied) {
+      if (slot.timer !== undefined) clearTimeout(slot.timer);
+      slot.timer = undefined;
+      return;
+    }
+    if (slot.timer !== undefined) return; // o timer pendente aplica o valor mais recente
+    const wait = slot.lastStart + this.intervalMs - Date.now();
+    if (wait > 0) {
+      slot.timer = setTimeout(() => { slot.timer = undefined; this.pump(slot, key); }, wait);
+      slot.timer.unref();
+      return;
+    }
+    const value = slot.desired;
+    slot.inflight = true;
+    slot.lastStart = Date.now();
+    this.apply(key, value)
+      .then(() => { slot.applied = value; })
+      .catch((e: unknown) => { this.log(`falha ao aplicar "${value}" em ${key}: ${(e as Error).message}`); })
+      .finally(() => { slot.inflight = false; this.pump(slot, key); });
+  }
 }
 
 export interface ThreadSession {
@@ -54,9 +126,6 @@ interface ThreadInfo {
   /** Nome/estado desejados (o último pedido); aplicados no máximo 1×/30 s. */
   name: string;
   state: SessionState;
-  appliedName: string;
-  lastRenameAt: number;
-  timer: NodeJS.Timeout | undefined;
 }
 
 function introEmbed(s: ThreadSession, state: SessionState, account: string | null): EmbedSpec {
@@ -77,8 +146,8 @@ function introEmbed(s: ThreadSession, state: SessionState, account: string | nul
  *
  * - `ensureThread` nunca cria duas threads para o mesmo `sessionId`: chamadas concorrentes compartilham a mesma
  *   promessa, e a thread gravada no banco é reaproveitada (restart do relay).
- * - O nome é `<emoji do estado> <nome da sessão>`; renomeações (por estado ou por nome) acontecem no máximo 1× a
- *   cada 30 s por thread — dentro da janela, só o último pedido é aplicado quando ela abrir.
+ * - O nome é `<emoji do estado> <nome da sessão>`; renomeações (por estado ou por nome) passam por um
+ *   `LatestOnlyUpdater`: no máximo 1 rename em voo por thread, intervalo mínimo de 300 s, só o último nome aplicado.
  */
 export class ThreadRegistry {
   private readonly db: Db;
@@ -88,12 +157,14 @@ export class ThreadRegistry {
   private readonly byThread = new Map<string, ThreadInfo>();
   private readonly bySession = new Map<string, string>();
   private readonly creating = new Map<string, Promise<string>>();
+  private readonly renamer: LatestOnlyUpdater;
 
   constructor(opts: ThreadRegistryOptions) {
     this.db = opts.db;
     this.port = opts.port;
     this.channelFor = opts.channelFor;
     this.log = opts.log ?? ((m) => { console.error(m); });
+    this.renamer = new LatestOnlyUpdater((threadId, name) => this.port.renameThread(threadId, name), this.log);
   }
 
   /** Thread já conhecida da sessão (memória ou banco), sem criar. */
@@ -137,10 +208,7 @@ export class ThreadRegistry {
   }
 
   dispose(): void {
-    for (const info of this.byThread.values()) {
-      if (info.timer !== undefined) clearTimeout(info.timer);
-      info.timer = undefined;
-    }
+    this.renamer.dispose();
   }
 
   private async create(machine: string, s: ThreadSession, state: SessionState): Promise<string> {
@@ -163,37 +231,11 @@ export class ThreadRegistry {
 
   private register(sessionId: string, threadId: string, name: string, state: SessionState): void {
     this.bySession.set(sessionId, threadId);
-    this.byThread.set(threadId, {
-      threadId, name, state, appliedName: threadName(name, state), lastRenameAt: Number.NEGATIVE_INFINITY, timer: undefined,
-    });
+    this.byThread.set(threadId, { threadId, name, state });
+    this.renamer.seed(threadId, threadName(name, state));
   }
 
   private schedule(info: ThreadInfo): void {
-    if (threadName(info.name, info.state) === info.appliedName) {
-      if (info.timer !== undefined) clearTimeout(info.timer);
-      info.timer = undefined;
-      return;
-    }
-    if (info.timer !== undefined) return; // o timer pendente aplica o pedido mais recente
-    const wait = info.lastRenameAt + RENAME_WINDOW_MS - Date.now();
-    if (wait <= 0) {
-      this.apply(info);
-      return;
-    }
-    info.timer = setTimeout(() => { this.apply(info); }, wait);
-    info.timer.unref();
-  }
-
-  private apply(info: ThreadInfo): void {
-    info.timer = undefined;
-    const target = threadName(info.name, info.state);
-    if (target === info.appliedName) return;
-    const previous = info.appliedName;
-    info.appliedName = target;
-    info.lastRenameAt = Date.now();
-    this.port.renameThread(info.threadId, target).catch((e: unknown) => {
-      if (info.appliedName === target) info.appliedName = previous;
-      this.log(`falha ao renomear a thread ${info.threadId} para "${target}": ${(e as Error).message}`);
-    });
+    this.renamer.set(info.threadId, threadName(info.name, info.state));
   }
 }
