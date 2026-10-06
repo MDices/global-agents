@@ -249,6 +249,14 @@ a { color: var(--accent); }
 .note { font-size: 13px; color: var(--muted); max-width: 75ch; margin: 0; }
 footer.note { border-top: 1px solid var(--line); padding-top: 16px; }
 
+/* time de agentes (cenário 9) */
+.hdr .pins { margin-left: auto; color: var(--dc-muted); font-size: 13px; }
+.tasks { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; margin-top: 2px; }
+.tasks .own { font-family: var(--font-dc-code); font-size: 13px; color: var(--dc-muted); }
+.anno { margin: 6px 16px 2px 72px; padding: 6px 10px; border: 1px dashed var(--dc-gray); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--dc-muted); line-height: 1.45; }
+.anno code { font-family: var(--font-dc-code); font-size: 12px; color: var(--dc-text); }
+.side-anno { margin: 10px 4px 0; white-space: normal; }
+
 @media (max-width: 860px) {
   .dc { grid-template-columns: minmax(0, 1fr); }
   .rail { display: none; }
@@ -266,6 +274,7 @@ footer.note { border-top: 1px solid var(--line); padding-top: 16px; }
   .composer { margin-inline: 10px; }
   .ac { margin-inline: 10px; }
   .em { padding-right: 10px; }
+  .anno { margin-left: 10px; margin-right: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 html { scroll-behavior: smooth; }
@@ -290,6 +299,7 @@ html { scroll-behavior: smooth; }
     <li><a href="#estados"><span>6</span>Estados da thread</a></li>
     <li><a href="#comandos"><span>7</span>Comandos gerais</a></li>
     <li><a href="#erros"><span>8</span>Erros e avisos</a></li>
+    <li><a href="#time"><span>9</span>Time de agentes</a></li>
     <li><a href="#decisoes"><span>✓</span>Decisões</a></li>
   </ol>
 </nav>
@@ -1114,6 +1124,191 @@ html { scroll-behavior: smooth; }
   </div>
 </section>
 
+<!-- ============ 9. TIME DE AGENTES ============ -->
+<section class="scene" id="time">
+  <div class="scene-head">
+    <div class="flow">§6.2.2 · Times de agentes · hooks de teammate → team.update / team.event → thread do líder (painel fixado + linhas curtas)</div>
+    <h2>9. Time de agentes</h2>
+    <p>No terminal, Leonardo pede um time à sessão <code>refatorar-crm</code>. O líder continua sendo uma sessão normal, com thread. Os teammates <code>alpha</code>, <code>beta</code> e <code>gama</code> aparecem dentro dela: um painel fixado, editado a cada mudança (no máximo 1× a cada 5 s), e uma linha curta por evento.</p>
+  </div>
+  <div class="dc">
+    <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+    <aside class="side">
+      <div class="srv">global-agents <i>▾</i></div>
+      <div class="chs">
+        <div class="cat">⌄ global-agents</div>
+        <div class="ch"><span class="hash">#</span>fedora-leonardo</div>
+        <div class="th on"><span>🟢 refatorar-crm</span></div>
+        <div class="th"><span>⚪ correcoes-bugs</span></div>
+        <div class="ch"><span class="hash">#</span>toneli-pc-admin</div>
+        <div class="anno side-anno">👥 teammates não ganham thread própria; tudo do time fica na thread do líder</div>
+      </div>
+      <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+    </aside>
+    <div class="main">
+      <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> 🟢 refatorar-crm</span><span class="pins" title="Mensagens fixadas">📌 1</span></div>
+      <div class="msgs">
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <p>🧑 <strong>prompt</strong></p>
+              <blockquote>crie um time com alpha, beta e gama para revisar o módulo CRM: backend, testes e segurança</blockquote>
+            </div>
+          </div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>🟢 refatorar-crm</b> <span class="ts">Hoje às 15:31</span></span></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <div class="em blurple">
+                <div class="au">👥 Time</div>
+                <div class="tt">session-4e9b1c07 · 3 teammates</div>
+                <div class="flds">
+                  <div class="fld full"><b>Membros</b>🟢 <code>alpha</code> trabalhando · 🟢 <code>beta</code> trabalhando · 🟢 <code>gama</code> trabalhando</div>
+                  <div class="fld full"><b>Tarefas</b>
+                    <div class="tasks">
+                      <span>☐ revisar controllers do CRM</span><span class="own">alpha</span>
+                      <span>☐ cobertura de specs do CRM</span><span class="own">beta</span>
+                      <span>☐ auditoria de segurança (params e autorização)</span><span class="own">gama</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ft">refatorar-crm · fedora/leonardo · atualizado às 15:31</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="sys"><span class="ic">📌</span><span><b>global-agents</b> fixou <a class="link">uma mensagem</a> neste canal. <a class="link">Ver todas as mensagens fixadas.</a> <span class="ts">Hoje às 15:31</span></span></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc"><p>📋 tarefa criada: <strong>revisar controllers do CRM</strong></p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:31</div><div class="mb"><div class="mc"><p>📋 tarefa criada: <strong>cobertura de specs do CRM</strong></p></div></div></div>
+        <div class="m"><div class="cts">15:31</div><div class="mb"><div class="mc"><p>📋 tarefa criada: <strong>auditoria de segurança (params e autorização)</strong></p></div></div></div>
+        <div class="m"><div class="cts">15:36</div><div class="mb"><div class="mc"><p>💬 <strong>alpha:</strong> encontrei 3 N+1 em <code>leads_controller</code>: o <code>index</code> carrega <code>owner</code> e <code>tags</code> sem <code>includes</code>, o <code>show</code> refaz a consulta de atividades por item e o <code>export</code> monta o CSV linha a linha com…</p><span class="sub">resposta curta do teammate, cortada em 300 caracteres</span></div></div></div>
+        <div class="m"><div class="cts">15:38</div><div class="mb"><div class="mc"><p>✅ <strong>beta</strong> concluiu: cobertura de specs do CRM</p></div></div></div>
+        <div class="m"><div class="cts">15:39</div><div class="mb"><div class="mc"><p>🟡 um teammate aguarda permissão no terminal do líder</p></div></div></div>
+        <div class="anno">Sem botões: no v1 não existe aprovação remota de teammate. O pedido aparece só no terminal do líder (o hook <code>PermissionRequest</code> não dispara para teammates); decida lá com <code>claude attach 4e9b1c07</code>.</div>
+
+        <div class="m first">
+          <div class="av user">L</div>
+          <div class="mb">
+            <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 15:41</span></div>
+            <div class="mc"><p>@beta roda também os specs de request</p></div>
+            <div class="rxs"><span class="rx">✅ <small>1</small></span></div>
+          </div>
+        </div>
+        <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">@beta roda também os specs de request</span></div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:41</span></div>
+            <div class="mc"><p>💬 <strong>repassado ao líder → beta</strong></p></div>
+          </div>
+        </div>
+        <div class="anno">O líder recebe <code>Repasse ao teammate beta: roda também os specs de request</code>. Teammates não têm inbox; só o líder fala com eles.</div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:42</span></div>
+            <div class="mc"><p>📋 tarefa criada: <strong>specs de request do CRM</strong></p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:44</div><div class="mb"><div class="mc"><p>✅ <strong>alpha</strong> concluiu: revisar controllers do CRM</p></div></div></div>
+        <div class="m"><div class="cts">15:45</div><div class="mb"><div class="mc"><p>⚫ <strong>alpha</strong> encerrado</p></div></div></div>
+        <div class="m"><div class="cts">15:47</div><div class="mb"><div class="mc"><p>✅ <strong>gama</strong> concluiu: auditoria de segurança (params e autorização)</p></div></div></div>
+        <div class="m"><div class="cts">15:47</div><div class="mb"><div class="mc"><p>💤 <strong>gama</strong> ocioso</p></div></div></div>
+
+        <div class="vlabel" style="padding: 12px 16px 0; margin: 0">… às 15:47, a mesma mensagem fixada, editada (não sai mensagem nova):</div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <div class="em blurple">
+                <div class="au">👥 Time</div>
+                <div class="tt">session-4e9b1c07 · 3 teammates</div>
+                <div class="flds">
+                  <div class="fld full"><b>Membros</b>⚫ <code>alpha</code> encerrado · 🟢 <code>beta</code> trabalhando · 💤 <code>gama</code> ocioso</div>
+                  <div class="fld full"><b>Tarefas</b>
+                    <div class="tasks">
+                      <span>☑ revisar controllers do CRM</span><span class="own">alpha</span>
+                      <span>☑ cobertura de specs do CRM</span><span class="own">beta</span>
+                      <span>☑ auditoria de segurança (params e autorização)</span><span class="own">gama</span>
+                      <span>☐ specs de request do CRM</span><span class="own">beta</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ft">refatorar-crm · fedora/leonardo · atualizado às 15:47</div>
+              </div>
+              <span class="edited">(editado)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:51</span></div>
+            <div class="mc"><p>✅ <strong>beta</strong> concluiu: specs de request do CRM</p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:51</div><div class="mb"><div class="mc"><p>💤 <strong>beta</strong> ocioso</p></div></div></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:53</span></div>
+            <div class="mc">
+              <p>O time terminou a revisão do módulo CRM. Resumo por frente:</p>
+              <p class="h3">Backend (alpha)</p>
+              <ul>
+                <li><code>LeadsController#index</code>: <code>owner</code> e <code>tags</code> sem <code>includes</code>, 1 + 2N consultas por página.</li>
+                <li><code>LeadsController#show</code>: atividades carregadas uma a uma dentro do partial.</li>
+                <li><code>LeadsController#export</code>: CSV montado com <code>each</code> em vez de <code>find_each</code>, estoura memória acima de 20 mil leads.</li>
+              </ul>
+<pre><code><span class="k">def</span> <span class="f">index</span>
+  <span class="c"># antes: Lead.where(filtros).page(params[:page])</span>
+  @leads = <span class="f">Lead</span>.where(filtros).includes(<span class="s">:owner</span>, <span class="s">:tags</span>).page(params[<span class="s">:page</span>])
+<span class="k">end</span></code></pre>
+              <span class="sub">(parte 1/2)</span>
+            </div>
+          </div>
+        </div>
+        <div class="m">
+          <div class="cts">15:53</div>
+          <div class="mb"><div class="mc">
+            <p class="h3">Testes (beta)</p>
+            <ul>
+              <li>Cobertura do CRM foi de <strong>71% para 88%</strong> com 26 exemplos novos em <code>spec/services/crm</code>.</li>
+              <li><code>bundle exec rspec spec/requests/crm</code> → <strong>34 exemplos, 0 falhas</strong>.</li>
+            </ul>
+            <p class="h3">Segurança (gama)</p>
+            <ul>
+              <li><code>OportunidadesController</code> usa <code>params.permit!</code>: troquei por lista explícita de campos.</li>
+              <li><code>ExportacoesController</code> não checa se o lead é da filial do usuário: falta <code>authorize @lead</code>.</li>
+            </ul>
+            <p>Nada commitado. 6 arquivos alterados em <code>app/controllers/crm</code> e <code>spec/</code>. Quer que eu abra a branch <code>refactor/crm-n-plus-one</code>?</p>
+            <span class="sub">(parte 2/2)</span>
+          </div></div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>⚪ refatorar-crm</b> <span class="ts">Hoje às 15:53</span></span></div>
+      </div>
+      <div class="composer"><span class="plus">+</span>Conversar em ⚪ refatorar-crm</div>
+    </div>
+  </div>
+</section>
+
 <!-- ============ DECISÕES ============ -->
 <section class="scene decisions" id="decisoes">
   <div class="scene-head">
@@ -1130,6 +1325,9 @@ html { scroll-behavior: smooth; }
     <li><b>Primeira mensagem da thread como embed</b><span>Pasta, conta, estado e <code>claude attach</code> num embed cinza (verde/azul quando criada por <code>/novo</code>). Alternativa: texto simples, mais fácil de copiar no celular.</span><em>cenários 2, 4</em></li>
     <li><b>Nome da thread criada por /novo derivado do prompt</b><span>"gera o relatório de inadimplência…" virou <code>relatorio-inadimplencia</code>. Alternativa: adicionar uma opção <code>nome</code> ao <code>/novo</code>, ou usar um nome gerado pelo Claude.</span><em>cenário 4</em></li>
     <li><b>Offline só no tópico do canal; menção ao bot responde perguntas de status</b><span>Nenhuma mensagem é postada quando a máquina cai, para não poluir. A menção <code>@global-agents</code> não está na spec: proposta é responder só sobre sessões e permissões, sem criar sessão.</span><em>cenários 7, 8</em></li>
+    <li><b>Painel "👥 Time" fixado e editado, em vez de uma mensagem nova a cada mudança</b><span>Uma única mensagem fixada com membros, estados e tarefas, editada no máximo 1× a cada 5 s; a thread recebe só as linhas curtas de evento. Alternativa: postar um painel novo a cada <code>team.update</code>, o que deixa o histórico visível mas enche a thread.</span><em>cenário 9</em></li>
+    <li><b>Mostrar respostas curtas dos teammates (<code>💬 alpha: …</code>)</b><span>A última fala do teammate aparece cortada em 300 caracteres, junto dos eventos de tarefa. Alternativa: só eventos de tarefa e de estado (📋 ✅ 💤 ⚫), e o conteúdo chega apenas na resposta final do líder.</span><em>cenário 9</em></li>
+    <li><b><code>@nome</code> na thread do líder para falar com um teammate</b><span>A mensagem que começa com <code>@beta</code> vira <code>Repasse ao teammate beta: …</code> injetado no líder, e o bot confirma com <code>💬 repassado ao líder → beta</code>. Alternativa: não ter atalho e você mesmo pedir ao líder em texto livre.</span><em>cenário 9</em></li>
   </ol>
 </section>
 
