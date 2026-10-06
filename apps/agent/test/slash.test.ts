@@ -284,6 +284,7 @@ describe("detecção nas telas reais (2.1.292)", () => {
     expect(isBusyScreen(fixtureLines("busy"))).toBe(true);
     expect(isBusyScreen(["* Actioning… (12s · still thinking with medium effort)"])).toBe(true);
     expect(isBusyScreen(["  esc to interrupt"])).toBe(true);
+    expect(isBusyScreen(["✶ Compacting conversation… (3s · ↓ 40 tokens)"])).toBe(true);
     expect(isBusyScreen(["✻ Worked for 4s · done 18:36"])).toBe(false);
   });
 });

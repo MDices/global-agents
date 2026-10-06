@@ -20,7 +20,7 @@ const DIALOG_BORDER = /▔{8,}/;
 /** Rodapé (`/status`, `/hooks`, `/model`) ou abas do diálogo de configurações (`/usage` e `/cost` rolam e escondem o rodapé). */
 const DIALOG_MARKS = [/esc to (cancel|close)/i, /Settings\s+Status\s+Config/];
 /** Turno em andamento: spinner `✢ Sublimating… (3s · ↓ 117 tokens)` (intermitente) ou `esc to interrupt`. */
-const BUSY_MARKS = [/^\s*\S{1,2}\s+[\p{L}-]+…\s*\(\d+s\b/u, /esc to interrupt/i];
+const BUSY_MARKS = [/…\s*\(\d+s\b/, /esc to interrupt/i];
 /** Comandos que não mexem na conversa: podem rodar com a sessão ocupada. */
 export const SLASH_WHILE_BUSY: ReadonlySet<SlashCommandName> = new Set(["usage", "cost", "status"]);
 export const BUSY_TEXT = "sessão ocupada; tente quando o turno terminar";
