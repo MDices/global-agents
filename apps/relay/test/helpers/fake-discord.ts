@@ -1,4 +1,4 @@
-import type { DiscordPort, EmbedSpec } from "../../src/discord/bot.js";
+import type { CardSpec, DiscordPort, EmbedSpec } from "../../src/discord/bot.js";
 
 export type FakeCall =
   | { op: "ensureChannel"; name: string; topic: string }
@@ -11,7 +11,9 @@ export type FakeCall =
   | { op: "removeReaction"; channelId: string; messageId: string; emoji: string }
   | { op: "reply"; channelId: string; messageId: string; text: string }
   | { op: "pin"; channelId: string; messageId: string }
-  | { op: "edit"; channelId: string; messageId: string; text: string };
+  | { op: "edit"; channelId: string; messageId: string; text: string }
+  | { op: "postCard"; threadId: string; card: CardSpec }
+  | { op: "editCard"; threadId: string; messageId: string; card: CardSpec };
 
 /** Implementação de `DiscordPort` em memória que grava todas as chamadas, para testes sem rede. */
 export class FakeDiscordPort implements DiscordPort {
@@ -104,5 +106,14 @@ export class FakeDiscordPort implements DiscordPort {
 
   async edit(channelId: string, messageId: string, text: string): Promise<void> {
     this.calls.push({ op: "edit", channelId, messageId, text });
+  }
+
+  async postCard(threadId: string, card: CardSpec): Promise<{ messageId: string }> {
+    this.calls.push({ op: "postCard", threadId, card });
+    return { messageId: `msg-${++this.seq}` };
+  }
+
+  async editCard(threadId: string, messageId: string, card: CardSpec): Promise<void> {
+    this.calls.push({ op: "editCard", threadId, messageId, card });
   }
 }

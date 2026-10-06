@@ -18,7 +18,7 @@ import {
   type TextChannel,
 } from "discord.js";
 import type { RelayConfig } from "../config.js";
-import { SLASH_COMMANDS, type SlashInteraction, type SlashView } from "./slash.js";
+import { SLASH_COMMANDS, type SlashButton, type SlashInteraction, type SlashView } from "./slash.js";
 
 export interface EmbedField {
   name: string;
@@ -33,6 +33,17 @@ export interface EmbedSpec {
   color?: number;
   fields?: EmbedField[];
   footer?: string;
+}
+
+/** Mensagem com embed e botões (card de permissão). */
+export interface CardSpec {
+  /** Texto fora do embed; omitido numa edição, o texto atual fica. */
+  content?: string;
+  /** Únicos usuários que o post pode notificar (menções em `content`); edições nunca notificam. */
+  mentions?: string[];
+  embed: EmbedSpec;
+  /** `[]` tira os botões. */
+  buttons: SlashButton[];
 }
 
 /**
@@ -61,6 +72,10 @@ export interface DiscordPort {
   pin(channelId: string, messageId: string): Promise<void>;
   /** Troca o texto de uma mensagem do próprio bot. */
   edit(channelId: string, messageId: string, text: string): Promise<void>;
+  /** Posta um card (embed + botões); só os usuários de `card.mentions` são notificados. */
+  postCard(threadId: string, card: CardSpec): Promise<{ messageId: string }>;
+  /** Troca embed e botões de um card do próprio bot. */
+  editCard(threadId: string, messageId: string, card: CardSpec): Promise<void>;
 }
 
 export function createBot(
@@ -102,18 +117,26 @@ export async function registerSlashCommands(client: Client, guildId: string): Pr
   await client.rest.put(Routes.applicationGuildCommands(appId, guildId), { body: SLASH_COMMANDS });
 }
 
-function messageFrom(v: SlashView) {
-  const buttons = v.buttons?.map((b) => new ButtonBuilder()
+const BUTTON_STYLE: Record<SlashButton["style"], ButtonStyle> = {
+  danger: ButtonStyle.Danger,
+  secondary: ButtonStyle.Secondary,
+  success: ButtonStyle.Success,
+};
+
+function componentsFrom(buttons: SlashButton[]): ActionRowBuilder<ButtonBuilder>[] {
+  if (buttons.length === 0) return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.map((b) => new ButtonBuilder()
     .setCustomId(b.customId)
     .setLabel(b.label)
-    .setStyle(b.style === "danger" ? ButtonStyle.Danger : ButtonStyle.Secondary)
-    .setDisabled(b.disabled ?? false));
+    .setStyle(BUTTON_STYLE[b.style])
+    .setDisabled(b.disabled ?? false)))];
+}
+
+function messageFrom(v: SlashView) {
   return {
     ...(v.content !== undefined ? { content: v.content } : {}),
     ...(v.embeds !== undefined ? { embeds: v.embeds.map(embedFrom) } : {}),
-    ...(buttons !== undefined
-      ? { components: buttons.length === 0 ? [] : [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)] }
-      : {}),
+    ...(v.buttons !== undefined ? { components: componentsFrom(v.buttons) } : {}),
     allowedMentions: NO_MENTIONS,
   };
 }
@@ -230,6 +253,25 @@ export class DiscordJsPort implements DiscordPort {
   async edit(channelId: string, messageId: string, text: string): Promise<void> {
     const message = await this.message(channelId, messageId);
     await message.edit({ content: text, allowedMentions: NO_MENTIONS });
+  }
+
+  postCard(threadId: string, card: CardSpec): Promise<{ messageId: string }> {
+    return this.send(threadId, {
+      ...(card.content !== undefined ? { content: card.content } : {}),
+      embeds: [embedFrom(card.embed)],
+      components: componentsFrom(card.buttons),
+      allowedMentions: { users: [...(card.mentions ?? [])] },
+    });
+  }
+
+  async editCard(threadId: string, messageId: string, card: CardSpec): Promise<void> {
+    const message = await this.message(threadId, messageId);
+    await message.edit({
+      ...(card.content !== undefined ? { content: card.content } : {}),
+      embeds: [embedFrom(card.embed)],
+      components: componentsFrom(card.buttons),
+      allowedMentions: NO_MENTIONS,
+    });
   }
 
   private async message(channelId: string, messageId: string): Promise<Message> {

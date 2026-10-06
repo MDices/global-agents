@@ -103,7 +103,7 @@ export const SLASH_COMMANDS: RESTPostAPIChatInputApplicationCommandsJSONBody[] =
 export interface SlashButton {
   customId: string;
   label: string;
-  style: "danger" | "secondary";
+  style: "danger" | "secondary" | "success";
   disabled?: boolean;
 }
 

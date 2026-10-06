@@ -2,6 +2,7 @@ import type { EventEmitter } from "node:events";
 import type { AgentEvent, SessionInfo, SessionState } from "@global-agents/protocol";
 import type { Db } from "./db.js";
 import type { DiscordPort } from "./discord/bot.js";
+import type { PermissionFlow } from "./discord/cards.js";
 import { chunkText } from "./discord/chunk.js";
 import {
   hhmm, LatestOnlyUpdater, parseState, TeamPanels, teamEventLine, teamPanelText, truncate, type ThreadRegistry, type ThreadSession,
@@ -89,6 +90,8 @@ export interface RouterDeps {
   port: DiscordPort;
   threads: ThreadRegistry;
   hub: EventEmitter<AgentHubEvents>;
+  /** Cards de permissão; sem ele, `permission.*` é ignorado. */
+  permissions?: Pick<PermissionFlow, "onRequest" | "onResolved">;
   log?: Log;
 }
 
@@ -210,6 +213,12 @@ export function createRouter(deps: RouterDeps): Router {
     await panels.show(threadId, teamPanelText(e, name, machine, new Date()));
   };
 
+  // Na fila da máquina: a thread existe antes do card, e o desfecho nunca é tratado antes do card ter sido postado.
+  const onPermissionRequest = async (machine: string, e: EventOf<"permission.request">): Promise<void> => {
+    if (deps.permissions === undefined) return;
+    await deps.permissions.onRequest(machine, e, await threadFor(machine, e.sessionId));
+  };
+
   const onTeamEvent = async (machine: string, e: EventOf<"team.event">): Promise<void> => {
     await port.post(await threadFor(machine, e.leadSessionId), teamEventLine(e));
   };
@@ -229,7 +238,9 @@ export function createRouter(deps: RouterDeps): Router {
       case "agent.warning": return onWarning(machine, e);
       case "team.update": return onTeamUpdate(machine, e);
       case "team.event": return onTeamEvent(machine, e);
-      default: return Promise.resolve(); // acks: ponte de comandos (commands.ts); permissões: tarefas seguintes
+      case "permission.request": return onPermissionRequest(machine, e);
+      case "permission.resolved": return deps.permissions?.onResolved(e) ?? Promise.resolve();
+      default: return Promise.resolve(); // acks: ponte de comandos (commands.ts) e cards de permissão (main.ts)
     }
   };
 

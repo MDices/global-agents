@@ -7,6 +7,7 @@ import type { AgentEvent } from "@global-agents/protocol";
 import { createCommandBridge } from "./commands.js";
 import { loadRelayConfig, type LogLevel, type RelayConfig } from "./config.js";
 import { openDb, relayDbPath } from "./db.js";
+import { createPermissionFlow } from "./discord/cards.js";
 import { createBot, DiscordJsPort, registerSlashCommands, toSlashInteraction, type DiscordPort } from "./discord/bot.js";
 import { createSlashHandler, stripMention } from "./discord/slash.js";
 import { ThreadRegistry } from "./discord/threads.js";
@@ -110,7 +111,8 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
 
     const routerLog = (m: string): void => { log("warn", m); };
     const threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log: routerLog });
-    const router = createRouter({ db, port, threads, hub, log: routerLog });
+    const permissions = createPermissionFlow({ db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
+    const router = createRouter({ db, port, threads, hub, permissions, log: routerLog });
     const bridge = createCommandBridge({
       db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog, teamMembers: (id) => router.teamMembersOf(id),
     });
@@ -119,15 +121,18 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     // derrubar o bot e fechar o banco: fica logo acima do bot (ou do `db.close`, quando a porta é injetada).
     cleanup.splice(deps.port === undefined ? 2 : 1, 0, async () => {
       let timer: NodeJS.Timeout | undefined;
-      await Promise.race([Promise.all([router.idle(), bridge.idle(), slash.idle()]), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
+      await Promise.race([Promise.all([router.idle(), bridge.idle(), slash.idle(), permissions.idle()]), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
       clearTimeout(timer);
     });
     cleanup.push(() => { threads.dispose(); });
     cleanup.push(() => { router.dispose(); });
 
     // Mensagens nas threads viram `session.send`; acks reagem na mensagem; a fila drena quando a máquina conecta.
+    // Acks de `permission.decide` (`perm-…`) vão para os cards de permissão.
     const onAgentEvent = (machine: string, ev: AgentEvent): void => {
-      if (ev.type === "command.ack" || ev.type === "command.error") void bridge.onAck(machine, ev);
+      if (ev.type !== "command.ack" && ev.type !== "command.error") return;
+      if (ev.commandId.startsWith("perm-")) permissions.onCommandResult(machine, ev);
+      else void bridge.onAck(machine, ev);
     };
     const onMachineOnline = (machine: string): void => { void bridge.onMachineOnline(machine); };
     hub.on("event", onAgentEvent);
@@ -136,6 +141,7 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     cleanup.push(() => {
       slash.dispose();
       bridge.dispose();
+      permissions.dispose();
       hub.off("event", onAgentEvent);
       hub.off("online", onMachineOnline);
     });
@@ -147,7 +153,9 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
       );
       const onInteraction = (interaction: Interaction): void => {
         const i = toSlashInteraction(interaction);
-        if (i !== undefined) void slash.onInteraction(i);
+        if (i === undefined) return;
+        if (i.kind === "button" && i.customId.startsWith("perm:")) void permissions.onButton(i);
+        else void slash.onInteraction(i);
       };
       discord.on(Events.InteractionCreate, onInteraction);
       cleanup.push(() => { discord.off(Events.InteractionCreate, onInteraction); });
