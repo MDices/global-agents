@@ -2,6 +2,7 @@ import {
   newEnvelope, type AgentEvent, type PermissionBehavior, type RelayCommand, type SessionInfo, type SlashCommandName,
 } from "@global-agents/protocol";
 import type { InboxTarget } from "../claude/inject.js";
+import { BUSY_TEXT, SLASH_WHILE_BUSY } from "../claude/slash.js";
 import type { SessionRegistry } from "../claude/registry.js";
 import type { SpawnInput } from "../claude/spawn.js";
 
@@ -16,10 +17,7 @@ const NOT_BACKGROUND = "só sessões em background podem ser paradas pelo Discor
 const NO_PERMISSIONS = "permissões ainda não suportadas";
 const PERMISSION_GONE = "pedido de permissão não encontrado ou já resolvido";
 const SLASH_INTERACTIVE = "essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg";
-const SLASH_BUSY = "sessão ocupada; tente quando o turno terminar";
 const SLASH_RUNNING = "já há um comando do Claude rodando nessa sessão; espere ele terminar";
-/** Comandos que não mexem na conversa: podem rodar com a sessão ocupada. */
-const SLASH_WHILE_BUSY: ReadonlySet<SlashCommandName> = new Set(["usage", "cost", "status"]);
 
 export interface SlashInput {
   bgId: string;
@@ -110,13 +108,14 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
         case "session.slash": {
           const s = findSession(cmd.sessionId);
           if (s.bgId === undefined) throw new CommandError(SLASH_INTERACTIVE);
-          if (s.status === "busy" && !SLASH_WHILE_BUSY.has(cmd.command)) throw new CommandError(SLASH_BUSY);
+          reg = s.pid !== undefined ? deps.readRegistry(s.pid) : undefined;
+          if (s.status === "busy" && !SLASH_WHILE_BUSY.has(cmd.command)) throw new CommandError(BUSY_TEXT);
           if (attached.has(s.bgId)) throw new CommandError(SLASH_RUNNING);
           const bgId = s.bgId;
           attached.add(bgId);
           try {
             const r = await deps.slash({ bgId, command: cmd.command, ...(cmd.args !== undefined ? { args: cmd.args } : {}) });
-            return ack(cmd.commandId, { screen: r.screen });
+            return ack(cmd.commandId, { screen: redact(r.screen, reg) });
           } finally {
             attached.delete(bgId);
           }

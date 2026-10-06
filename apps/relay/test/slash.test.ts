@@ -626,7 +626,10 @@ describe("/claude", () => {
   });
 
   it("comando fora da allowlist ou args com quebra de linha/mais de 500 chars → recusado, nada enviado", async () => {
-    for (const opts of [{ comando: "clear" }, { comando: "compact", args: "a\nb" }, { comando: "compact", args: "a".repeat(501) }]) {
+    for (const opts of [
+      { comando: "clear" }, { comando: "compact", args: "a\nb" }, { comando: "compact", args: "a".repeat(501) },
+      { comando: "compact", args: "a\x1bb" }, { comando: "compact", args: "a\x03b" }, { comando: "compact", args: "a\tb" },
+    ]) {
       const i = claude(opts);
       await slash.onInteraction(i);
       await settle();

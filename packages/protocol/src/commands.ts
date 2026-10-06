@@ -12,7 +12,7 @@ export const RelayCommandSchema = z.discriminatedUnion("type", [
   cmd("session.create", { cwd: z.string().min(1), name: z.string().min(1).max(100), prompt: z.string().min(1).max(100_000), permissionMode: PermissionModeSchema }),
   cmd("session.send", { sessionId: z.string().min(1), text: z.string().min(1).max(100_000) }),
   cmd("session.stop", { sessionId: z.string().min(1) }),
-  cmd("session.slash", { sessionId: z.string().min(1), command: SlashCommandNameSchema, args: z.string().max(500).regex(/^[^\r\n]*$/, "sem quebras de linha").optional() }),
+  cmd("session.slash", { sessionId: z.string().min(1), command: SlashCommandNameSchema, args: z.string().max(500).regex(/^\P{Cc}*$/u, "sem caracteres de controle").optional() }),
   cmd("permission.decide", { requestId: z.string().min(1), behavior: PermissionBehaviorSchema }),
 ]);
 export type RelayCommand = z.infer<typeof RelayCommandSchema>;

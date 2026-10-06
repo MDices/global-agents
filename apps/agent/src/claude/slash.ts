@@ -12,8 +12,18 @@ const ROWS = 40;
 /** Quantas linhas da tela renderizada voltam no máximo. */
 const MAX_LINES = 60;
 const PROMPT_MARK = "❯";
-/** Borda de cima dos diálogos do Claude Code (`/status`, `/usage`, `/cost`…). */
+/**
+ * Borda de cima dos diálogos do Claude Code. Na 2.1.292 a tela ociosa não tem `▔`; a borda de `/usage` e `/model` traz
+ * `◐ medium · /effort` e continua sendo a do diálogo.
+ */
 const DIALOG_BORDER = /▔{8,}/;
+/** Rodapé (`/status`, `/hooks`, `/model`) ou abas do diálogo de configurações (`/usage` e `/cost` rolam e escondem o rodapé). */
+const DIALOG_MARKS = [/esc to (cancel|close)/i, /Settings\s+Status\s+Config/];
+/** Turno em andamento: spinner `✢ Sublimating… (3s · ↓ 117 tokens)` (intermitente) ou `esc to interrupt`. */
+const BUSY_MARKS = [/^\s*\S{1,2}\s+[\p{L}-]+…\s*\(\d+s\b/u, /esc to interrupt/i];
+/** Comandos que não mexem na conversa: podem rodar com a sessão ocupada. */
+export const SLASH_WHILE_BUSY: ReadonlySet<SlashCommandName> = new Set(["usage", "cost", "status"]);
+export const BUSY_TEXT = "sessão ocupada; tente quando o turno terminar";
 
 export interface SlashTimeouts {
   /** Teto para a sessão abrir (prompt `❯` na tela). */
@@ -87,27 +97,29 @@ function toScreen(lines: string[]): string {
   return lines.slice(Math.max(start, end - MAX_LINES), end).join("\n");
 }
 
-/** Trecho da tela que decide se ela "parou": o diálogo aberto, se houver; senão a tela toda. */
-function watchedRegion(lines: string[]): string {
-  let border = -1;
+/** Texto do diálogo aberto (da última borda `▔` até o fim), ou `undefined` se não há diálogo visível. */
+export function dialogRegion(lines: string[]): string | undefined {
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (DIALOG_BORDER.test(lines[i] ?? "")) {
-      border = i;
-      break;
-    }
+    if (!DIALOG_BORDER.test(lines[i] ?? "")) continue;
+    const region = lines.slice(i).join("\n");
+    return DIALOG_MARKS.some((m) => m.test(region)) ? region : undefined;
   }
-  return (border >= 0 ? lines.slice(border) : lines).join("\n");
+  return undefined;
 }
+
+/** A tela mostra um turno em andamento (spinner ou `esc to interrupt`). */
+export const isBusyScreen = (lines: string[]): boolean => lines.some((l) => BUSY_MARKS.some((m) => m.test(l)));
 
 const hasPrompt = (lines: string[]): boolean => lines.some((l) => l.trimStart().startsWith(PROMPT_MARK));
 
 /**
  * Roda um slash command do Claude Code numa sessão em background: abre `claude attach <bgId>` num pty, espera o
- * prompt, digita `/<comando>[ <args>]` + Enter, espera a tela parar, captura o texto renderizado, fecha diálogos com
- * Esc e desanexa com Ctrl+Z (a sessão continua rodando). Mata o pty se ele não sair.
+ * prompt, digita `/<comando>[ <args>]` + Enter, espera a tela parar, captura o texto renderizado, fecha o diálogo com
+ * Esc (só se houver um visível) e desanexa com Ctrl+Z (a sessão continua rodando). Mata o pty se ele não sair.
  *
- * A tela "parou" quando não chega byte novo por `settleMs`, ou quando um diálogo está aberto e o texto dele não muda
- * por `settleMs`: com a sessão ocupada o transcript é redesenhado sem parar e o silêncio de bytes nunca chega.
+ * A tela "parou" quando não chega byte novo por `settleMs`, ou quando um diálogo visível (borda `▔` + rodapé ou abas)
+ * não muda por `settleMs`: com a sessão ocupada o transcript é redesenhado sem parar e o silêncio de bytes nunca chega.
+ * Fora de `usage`/`cost`/`status`, sessão em turno → `BUSY_TEXT` sem digitar nada.
  */
 export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty } = {}): Promise<{ screen: string }> {
   const t: SlashTimeouts = {
@@ -137,6 +149,12 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
 
   const lastLine = async (): Promise<string> => toScreen(await renderLines(term)).split("\n").at(-1)?.trim() ?? "";
 
+  /**
+   * Comandos que mexem na conversa só rodam com a sessão parada: spinner na tela → ocupada; e o pronto exige silêncio
+   * (uma sessão em turno nunca fica quieta), então estourar o teto com o `❯` na tela também é "ocupada".
+   * `usage`/`cost`/`status` aceitam o atalho "`❯` na tela há `readyQuietMs`".
+   */
+  const strict = !SLASH_WHILE_BUSY.has(input.command);
   const waitReady = async (): Promise<void> => {
     const deadline = Date.now() + t.readyMs;
     let promptSince: number | undefined;
@@ -146,11 +164,16 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
         throw new Error(`claude attach saiu antes de a sessão abrir (código ${exitCode})${last === "" ? "" : `: ${last}`}`);
       }
       const now = Date.now();
-      if (hasPrompt(await renderLines(term))) {
+      const lines = await renderLines(term);
+      if (strict && isBusyScreen(lines)) throw new Error(BUSY_TEXT);
+      if (hasPrompt(lines)) {
         promptSince ??= now;
-        if (now - lastData >= t.readyQuietMs || now - promptSince >= t.readyQuietMs) return;
+        if (now - lastData >= t.readyQuietMs || (!strict && now - promptSince >= t.readyQuietMs)) return;
       }
-      if (now >= deadline) throw new Error(`tempo esgotado esperando a sessão abrir (${Math.round(t.readyMs / 1000)} s)`);
+      if (now >= deadline) {
+        if (strict && promptSince !== undefined) throw new Error(BUSY_TEXT);
+        throw new Error(`tempo esgotado esperando a sessão abrir (${Math.round(t.readyMs / 1000)} s)`);
+      }
       await sleep(t.pollMs);
     }
   };
@@ -164,12 +187,12 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
       const lines = await renderLines(term);
       if (exitCode !== undefined) throw new Error(`claude attach saiu durante o comando (código ${exitCode})`);
       const now = Date.now();
-      const r = watchedRegion(lines);
+      const r = dialogRegion(lines) ?? "";
       if (r !== region) {
         region = r;
         regionSince = now;
       }
-      const dialogStill = DIALOG_BORDER.test(r) && now - regionSince >= t.settleMs;
+      const dialogStill = r !== "" && now - regionSince >= t.settleMs;
       if (now - lastData >= t.settleMs || dialogStill) return lines;
       if (now >= deadline) throw new Error(`tempo esgotado esperando /${input.command} terminar (${Math.round(t.ceilingMs / 1000)} s)`);
     }
@@ -185,8 +208,11 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
 
   const detach = async (): Promise<void> => {
     if (exitCode !== undefined) return;
-    send("\x1b");
-    await sleep(t.escGapMs);
+    // Esc só fecha diálogo: sem diálogo na tela ele interromperia um turno em andamento.
+    if (dialogRegion(await renderLines(term)) !== undefined) {
+      send("\x1b");
+      await sleep(t.escGapMs);
+    }
     send("\x1a");
     const exited = await new Promise<boolean>((resolve) => {
       if (exitCode !== undefined) {

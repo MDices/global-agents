@@ -459,8 +459,8 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     }
     const command = parsed.data;
     const args = (i.options.getString("args") ?? "").trim();
-    if (/[\r\n]/.test(args) || args.length > SLASH_ARGS_MAX) {
-      reply(i, text(failure(`args inválidos: uma linha só, até ${SLASH_ARGS_MAX} caracteres`)));
+    if (!/^\P{Cc}*$/u.test(args) || args.length > SLASH_ARGS_MAX) {
+      reply(i, text(failure(`args inválidos: uma linha só, sem caracteres de controle, até ${SLASH_ARGS_MAX} caracteres`)));
       return;
     }
     reply(i, text(`executando /${command}…`));

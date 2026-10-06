@@ -32,5 +32,11 @@ describe("comandos", () => {
       expect(RelayCommandSchema.safeParse(slash({ args: "a\nb" })).success).toBe(false);
       expect(RelayCommandSchema.safeParse(slash({ args: "a\rb" })).success).toBe(false);
     });
+    it("args com caracteres de controle é inválido (Esc, Ctrl+C, Ctrl+Z, tab, DEL)", () => {
+      for (const c of ["\x1b", "\x03", "\x1a", "\t", "\x7f", "\x00"]) {
+        expect(RelayCommandSchema.safeParse(slash({ args: `foco${c}x` })).success).toBe(false);
+      }
+      expect(RelayCommandSchema.safeParse(slash({ args: "foco em testes ✓ ação" })).success).toBe(true);
+    });
   });
 });

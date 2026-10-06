@@ -50,6 +50,12 @@ describe("session.slash", () => {
     expectValid(ev);
   });
 
+  it("a tela do ack passa pelo redact (caminho do socket e token do inbox)", async () => {
+    const d = deps({ slash: vi.fn(() => Promise.resolve({ screen: "Peer address:  uds:/run/cc/111.sock\nToken tok-secreto\nEmail: a@b.c" })) });
+    const ev = await createCommandHandler(d)(slashCmd("c1", "s-bg", "status"));
+    expect(ev).toMatchObject({ type: "command.ack", result: { screen: "Peer address:  uds:<inbox>\nToken ***\nEmail: a@b.c" } });
+  });
+
   it("sem args não passa args", async () => {
     const d = deps();
     await createCommandHandler(d)(slashCmd("c1", "s-bg", "status"));
