@@ -85,6 +85,22 @@ export function quotePrompt(text: string): string[] {
   );
 }
 
+/**
+ * Sessão a que o evento se refere, para conferir o dono. `session.list` é conferido item a item; `permission.*` é
+ * conferido pelos cards (`cards.ts`), que também cobrem o desfecho de pedidos antigos.
+ */
+function sessionOf(e: AgentEvent): string | undefined {
+  switch (e.type) {
+    case "session.status":
+    case "turn.prompt":
+    case "turn.reply":
+    case "agent.warning": return e.sessionId;
+    case "team.update":
+    case "team.event": return e.leadSessionId;
+    default: return undefined;
+  }
+}
+
 export interface RouterDeps {
   db: Db;
   port: DiscordPort;
@@ -167,8 +183,21 @@ export function createRouter(deps: RouterDeps): Router {
     topics.set(channelId, desired);
   };
 
+  /**
+   * A sessão já pertence a outra máquina no banco: o evento é descartado (com log, sem token). Sem isso um agente
+   * autenticado como A postaria na thread de B e, pelo upsert, tomaria a sessão para si (as mensagens humanas da
+   * thread passariam a ir para A). Mesma regra dos cards de permissão (`cards.ts`).
+   */
+  const ownedElsewhere = (machine: string, sessionId: string, type: AgentEvent["type"]): boolean => {
+    const owner = db.sessions.get(sessionId)?.machine;
+    if (owner === undefined || owner === machine) return false;
+    log(`${machine}: ${type} de sessão de outra máquina (${owner}); ignorado`);
+    return true;
+  };
+
   const onSessionList = async (machine: string, e: EventOf<"session.list">): Promise<void> => {
     for (const s of e.sessions) {
+      if (ownedElsewhere(machine, s.sessionId, e.type)) continue;
       const state = stateFromInfo(s);
       const threadId = await threads.ensureThread(machine, {
         sessionId: s.sessionId, name: s.name, cwd: s.cwd,
@@ -229,6 +258,10 @@ export function createRouter(deps: RouterDeps): Router {
     // permissão passa: um card postado antes de o filtro ligar não pode ficar pendente para sempre.
     const passes = e.type === "agent.hello" || e.type === "permission.resolved" || (e.type === "agent.warning" && e.sessionId === undefined);
     if (!passes && isSilenced(db, machine)) {
+      return Promise.resolve();
+    }
+    const sessionId = sessionOf(e);
+    if (sessionId !== undefined && ownedElsewhere(machine, sessionId, e.type)) {
       return Promise.resolve();
     }
     switch (e.type) {

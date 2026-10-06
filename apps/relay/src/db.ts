@@ -179,6 +179,7 @@ export interface Db {
     list(): Machine[];
   };
   sessions: {
+    /** Insere ou atualiza; a máquina de uma sessão existente nunca muda (um agente não toma a sessão de outro). */
     upsert(s: SessionInput): void;
     get(sessionId: string): Session | undefined;
     /** Sessão ligada à thread do Discord (a mais recente, se houver mais de uma). */
@@ -292,7 +293,6 @@ export function openDb(path: string): Db {
           `INSERT INTO sessions (session_id, machine, name, cwd, thread_id, bg_id, state, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
-             machine = excluded.machine,
              name = COALESCE(excluded.name, name), cwd = COALESCE(excluded.cwd, cwd),
              thread_id = COALESCE(excluded.thread_id, thread_id), bg_id = COALESCE(excluded.bg_id, bg_id),
              state = excluded.state, updated_at = excluded.updated_at`,

@@ -325,6 +325,71 @@ describe("times de agentes (thread do líder)", () => {
   });
 });
 
+describe("dono da sessão (spoofing entre máquinas)", () => {
+  const B = "mac/leo";
+
+  beforeEach(async () => {
+    emit(hello());
+    emit(hello(B));
+    await settle();
+    emit(ev("session.list", { sessions: [info("sb", "sessao-de-b")] }, B));
+    await settle();
+    port.calls.length = 0;
+    log.mockClear();
+  });
+
+  const intact = (): void => {
+    expect(db.sessions.get("sb")).toMatchObject({ machine: B, name: "sessao-de-b" });
+    expect(port.of("post")).toHaveLength(0);
+    expect(port.of("createThread")).toHaveLength(0);
+    expect(port.of("renameThread")).toHaveLength(0);
+    expect(port.of("postEmbed")).toHaveLength(0);
+  };
+
+  it("session.status de outra máquina não posta, não renomeia e não reatribui a sessão", async () => {
+    emit(ev("session.status", { sessionId: "sb", name: "sequestro", cwd: "/x", state: "working" }));
+    await settle();
+    await vi.advanceTimersByTimeAsync(600_000);
+    intact();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("sessão de outra máquina"));
+  });
+
+  it("turn.reply e turn.prompt de outra máquina não postam na thread dela", async () => {
+    emit(ev("turn.reply", { sessionId: "sb", text: "resposta falsa" }));
+    emit(ev("turn.prompt", { sessionId: "sb", text: "prompt falso", source: "terminal" }));
+    await settle();
+    intact();
+  });
+
+  it("session.list de outra máquina ignora só a sessão alheia; as próprias seguem", async () => {
+    emit(ev("session.list", { sessions: [info("sb", "sequestro"), info("sa", "minha")] }));
+    await settle();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(db.sessions.get("sb")).toMatchObject({ machine: B, name: "sessao-de-b" });
+    expect(db.sessions.get("sa")?.machine).toBe(M);
+    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: "ch-1", name: "⚪ minha" }]);
+    expect(port.of("renameThread")).toHaveLength(0);
+  });
+
+  it("agent.warning, team.update e team.event com sessão de outra máquina são ignorados", async () => {
+    emit(ev("agent.warning", { message: "falso", sessionId: "sb" }));
+    emit(ev("team.update", { leadSessionId: "sb", team: "t", members: [{ name: "alpha", state: "working" }], tasks: [] }));
+    emit(ev("team.event", { leadSessionId: "sb", kind: "teammate_permission" }));
+    await settle();
+    intact();
+    expect(router.teamMembersOf("sb")).toEqual([]);
+  });
+
+  it("os mesmos eventos vindos da dona continuam funcionando", async () => {
+    emit(ev("session.status", { sessionId: "sb", name: "sessao-de-b", cwd: "/x", state: "working" }, B));
+    emit(ev("turn.reply", { sessionId: "sb", text: "pronto" }, B));
+    emit(ev("session.list", { sessions: [info("sb", "renomeada")] }, B));
+    await settle();
+    expect(postsTo(threadOf("sb"))).toEqual(["pronto"]);
+    expect(db.sessions.get("sb")).toMatchObject({ machine: B, name: "renomeada" });
+  });
+});
+
 describe("online/offline", () => {
   it("offline edita o tópico com a hora; online restaura", async () => {
     emit(hello());

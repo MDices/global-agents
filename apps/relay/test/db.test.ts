@@ -85,6 +85,13 @@ describe("sessions", () => {
     expect(db.sessions.get("zzz")).toBeUndefined();
   });
 
+  it("upsert nunca reatribui a máquina de uma sessão existente", () => {
+    const db = openDb(":memory:");
+    db.sessions.upsert({ sessionId: "s1", machine: "m/u", name: "n", state: "idle", updatedAt: 1 });
+    db.sessions.upsert({ sessionId: "s1", machine: "x/y", name: "outra", state: "busy", updatedAt: 2 });
+    expect(db.sessions.get("s1")?.machine).toBe("m/u");
+  });
+
   it("listByMachine ordena por updated_at desc", () => {
     const db = openDb(":memory:");
     db.sessions.upsert({ sessionId: "a", machine: "m/u", state: "idle", updatedAt: 1 });
