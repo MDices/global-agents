@@ -2,6 +2,31 @@ import { EventEmitter } from "node:events";
 import { SessionInfoSchema, type SessionInfo } from "@global-agents/protocol";
 import { runClaude, type ExecResult } from "./exec.js";
 
+const OPTIONAL_FIELDS = ["status", "state", "waitingFor", "pid", "bgId"] as const;
+
+/** Normaliza uma linha; só a descarta se `sessionId` ou `cwd` não forem strings. Opcionais inválidos/null são omitidos. */
+function normalizeRow(o: Record<string, unknown>): SessionInfo | undefined {
+  const sessionId = o["sessionId"];
+  const cwd = o["cwd"];
+  if (typeof sessionId !== "string" || typeof cwd !== "string") return undefined;
+  const bgId = typeof o["id"] === "string" ? o["id"] : undefined;
+  const kind = SessionInfoSchema.shape.kind.safeParse(o["kind"]);
+  const c: Record<string, unknown> = {
+    sessionId, cwd, name: typeof o["name"] === "string" ? o["name"] : "",
+    kind: kind.success ? kind.data : bgId !== undefined ? "background" : "interactive",
+  };
+  const raw: Record<(typeof OPTIONAL_FIELDS)[number], unknown> = {
+    status: o["status"], state: o["state"], waitingFor: o["waitingFor"], pid: o["pid"], bgId,
+  };
+  for (const k of OPTIONAL_FIELDS) {
+    const v = raw[k];
+    if (v === undefined || v === null) continue;
+    if (SessionInfoSchema.shape[k].safeParse(v).success) c[k] = v;
+  }
+  const p = SessionInfoSchema.safeParse(c);
+  return p.success ? p.data : undefined;
+}
+
 export function parseAgentsJson(raw: string): SessionInfo[] {
   let arr: unknown;
   try {
@@ -13,14 +38,8 @@ export function parseAgentsJson(raw: string): SessionInfo[] {
   const out: SessionInfo[] = [];
   for (const r of arr as unknown[]) {
     if (typeof r !== "object" || r === null) continue;
-    const o = r as Record<string, unknown>;
-    const c: Record<string, unknown> = {
-      sessionId: o["sessionId"], name: o["name"] ?? "", cwd: o["cwd"], kind: o["kind"],
-      status: o["status"], state: o["state"], waitingFor: o["waitingFor"], pid: o["pid"],
-      bgId: typeof o["id"] === "string" ? o["id"] : undefined,
-    };
-    const p = SessionInfoSchema.safeParse(Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)));
-    if (p.success) out.push(p.data);
+    const s = normalizeRow(r as Record<string, unknown>);
+    if (s !== undefined) out.push(s);
   }
   return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }

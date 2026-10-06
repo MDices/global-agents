@@ -23,6 +23,36 @@ describe("parseAgentsJson", () => {
     expect(parseAgentsJson(windows)[0]?.cwd).toBe("C:\\Users\\Admin\\CDT\\gestai");
   });
 
+  describe("tolerância a campos opcionais", () => {
+    const base = { sessionId: "aaaa1111-0000-4000-8000-000000000001", cwd: "/tmp/x", kind: "interactive", name: "t" };
+    const one = (row: Record<string, unknown>): SessionInfo[] => parseAgentsJson(JSON.stringify([row]));
+
+    it("pid: null e status: null → linha mantida, campos ausentes", () => {
+      const list = one({ ...base, pid: null, status: null });
+      expect(list).toHaveLength(1);
+      expect(list[0]).not.toHaveProperty("pid");
+      expect(list[0]).not.toHaveProperty("status");
+    });
+
+    it("state desconhecido → linha mantida, state ausente", () => {
+      const list = one({ ...base, state: "starting", status: "busy" });
+      expect(list).toHaveLength(1);
+      expect(list[0]).not.toHaveProperty("state");
+      expect(list[0]?.status).toBe("busy");
+    });
+
+    it("kind desconhecido → deduzido pela presença de id", () => {
+      expect(one({ ...base, kind: "remote" })[0]?.kind).toBe("interactive");
+      expect(one({ ...base, kind: null, id: "aaaa1111" })[0]).toMatchObject({ kind: "background", bgId: "aaaa1111" });
+    });
+
+    it("sem sessionId ou sem cwd → linha descartada", () => {
+      expect(one({ ...base, sessionId: undefined })).toEqual([]);
+      expect(one({ ...base, cwd: undefined })).toEqual([]);
+      expect(one({ ...base, sessionId: null })).toEqual([]);
+    });
+  });
+
   it("JSON inválido → []", () => {
     expect(parseAgentsJson("")).toEqual([]);
     expect(parseAgentsJson("not json")).toEqual([]);
