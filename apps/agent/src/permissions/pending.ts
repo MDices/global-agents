@@ -7,12 +7,14 @@ const PREVIEW_MAX = 3500;
 const ARM_AFTER_MS = 10_000;
 /** Polls seguidos sem a sessão no inventário para considerar que ela acabou (decidido no terminal). */
 const MISSING_POLLS = 2;
+/** 29 min: abaixo do timeout de 1800 s do hook (e do `--max-time 1800` do script), para o deny chegar com folga. */
+export const DEFAULT_PERMISSION_TTL_MS = 1_740_000;
 
 export interface PendingPermissionsOptions {
   machine: string;
   inventory: { find(sessionId: string): SessionInfo | undefined };
   emit: (ev: AgentEvent) => void;
-  /** Expiração do pedido (padrão 30 min) → `deny`. */
+  /** Expiração do pedido (padrão `DEFAULT_PERMISSION_TTL_MS`, 29 min) → `deny`. */
   ttlMs?: number;
   /** Intervalo da vigia "decidido no terminal" (padrão 2 s). */
   terminalPollMs?: number;
@@ -75,7 +77,7 @@ export class PendingPermissions {
     this.machine = opts.machine;
     this.inventory = opts.inventory;
     this.emit = opts.emit;
-    this.ttlMs = opts.ttlMs ?? 30 * 60_000;
+    this.ttlMs = opts.ttlMs ?? DEFAULT_PERMISSION_TTL_MS;
     this.terminalPollMs = opts.terminalPollMs ?? 2000;
   }
 

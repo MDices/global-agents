@@ -49,7 +49,7 @@ describe("PendingPermissions", () => {
     expect(events[0]).toMatchObject({
       type: "permission.request", machine: "fedora/leonardo", sessionId: "s1", requestId: id, tool: "Bash",
       description: "Baixa a página", inputPreview: "curl -s https://example.com",
-      expiresAt: new Date(NOW.getTime() + 30 * 60_000).toISOString(),
+      expiresAt: new Date(NOW.getTime() + 1_740_000).toISOString(),
     });
     expect(pending.decide(id, "allow")).toBe(true);
     expect(respond).toHaveBeenCalledExactlyOnceWith({ behavior: "allow" });
@@ -77,10 +77,10 @@ describe("PendingPermissions", () => {
     expect(pending.decide(id, "allow")).toBe(false);
   });
 
-  it("30 min sem decisão → respond(deny) e resolved by=timeout behavior=deny", () => {
+  it("29 min (abaixo do timeout de 1800 s do hook) sem decisão → respond(deny) e resolved by=timeout behavior=deny", () => {
     const respond = vi.fn<(d: HookDecision | null) => void>();
     const id = pending.open(payload(), respond);
-    vi.advanceTimersByTime(30 * 60_000 - 1);
+    vi.advanceTimersByTime(1_740_000 - 1);
     expect(respond).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(respond).toHaveBeenCalledExactlyOnceWith({ behavior: "deny" });
@@ -194,10 +194,17 @@ describe("PendingPermissions", () => {
     expect(pending.decide(id, "allow")).toBe(false);
   });
 
-  it("respond que lança não impede a emissão nem quebra decide", () => {
+  it("respond que lança não impede a emissão nem quebra decide; o aviso não expõe tool_input", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const id = pending.open(payload(), () => { throw new Error("boom"); });
     expect(pending.decide(id, "deny")).toBe(true);
     expect(resolved()).toEqual([expect.objectContaining({ by: "remote", behavior: "deny" })]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0]?.[0]);
+    expect(msg).toContain(id);
+    expect(msg).toContain("Bash");
+    expect(msg).not.toContain("example.com");
+    warn.mockRestore();
   });
 
   it("ttlMs e terminalPollMs configuráveis", () => {
