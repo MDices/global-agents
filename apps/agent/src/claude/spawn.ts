@@ -10,6 +10,13 @@ export class WorkspaceNotTrustedError extends Error {
   }
 }
 
+export class SessionNotVisibleError extends Error {
+  constructor(readonly bgId: string) {
+    super(`sessão criada (${bgId}) mas não apareceu no inventário em 30 s; abra com: claude attach ${bgId}`);
+    this.name = "SessionNotVisibleError";
+  }
+}
+
 export type SpawnRun = (args: string[], opts?: { cwd?: string; timeoutMs?: number }) => Promise<ExecResult>;
 
 export interface SpawnInput {
@@ -37,7 +44,7 @@ export async function spawnSession(
   deps: { run: SpawnRun; inventory: Pick<Inventory, "waitFor"> },
 ): Promise<{ sessionId: string; bgId: string }> {
   if (!(await isDirectory(input.cwd))) throw new Error(`pasta não encontrada: ${input.cwd}`);
-  const r = await deps.run(["--bg", "--name", input.name, "--permission-mode", input.permissionMode, input.prompt], {
+  const r = await deps.run(["--bg", "--name", input.name, "--permission-mode", input.permissionMode, "--", input.prompt], {
     cwd: input.cwd,
     timeoutMs: 60000,
   });
@@ -45,6 +52,8 @@ export async function spawnSession(
   if (out.includes("Workspace not trusted")) throw new WorkspaceNotTrustedError(input.cwd);
   const bgId = parseBgId(out);
   if (bgId === undefined) throw new Error(`claude --bg não devolveu o id da sessão: ${out.trim().slice(0, 300)}`);
-  const info = await deps.inventory.waitFor((s) => s.bgId === bgId, 30000);
+  const info = await deps.inventory.waitFor((s) => s.bgId === bgId, 30000).catch(() => {
+    throw new SessionNotVisibleError(bgId);
+  });
   return { sessionId: info.sessionId, bgId };
 }

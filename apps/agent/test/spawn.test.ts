@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "../src/claude/exec.js";
 import type { Inventory, SessionInfo } from "../src/claude/inventory.js";
-import { spawnSession, WorkspaceNotTrustedError } from "../src/claude/spawn.js";
+import { SessionNotVisibleError, spawnSession, WorkspaceNotTrustedError } from "../src/claude/spawn.js";
 import { SessionNotFoundError, stopSession } from "../src/claude/stop.js";
 
 const OK_OUT =
@@ -26,11 +26,34 @@ describe("spawnSession", () => {
     const { inventory, waitFor } = fakeInventory();
     const r = await spawnSession(input, { run, inventory });
     expect(r).toEqual({ sessionId: "85285a68-454d-4000-8000-000000000000", bgId: "85285a68" });
-    expect(run).toHaveBeenCalledWith(["--bg", "--name", "nome", "--permission-mode", "plan", "prompt"], {
+    expect(run).toHaveBeenCalledWith(["--bg", "--name", "nome", "--permission-mode", "plan", "--", "prompt"], {
       cwd: process.cwd(),
       timeoutMs: 60000,
     });
     expect(waitFor.mock.calls[0]?.[1]).toBe(30000);
+  });
+
+  it("prompt começando com - vai após `--`", async () => {
+    const run = vi.fn().mockResolvedValue(ok(OK_OUT));
+    const { inventory } = fakeInventory();
+    await spawnSession({ ...input, prompt: "--help" }, { run, inventory });
+    expect(run.mock.calls[0]?.[0]).toEqual(["--bg", "--name", "nome", "--permission-mode", "plan", "--", "--help"]);
+  });
+
+  it("extrai o id da variante idle", async () => {
+    const run = vi.fn().mockResolvedValue(ok("backgrounded · fe6d8df0 · ga-dash1 (idle — send a prompt to start)\n"));
+    const waitFor = vi.fn().mockResolvedValue({ sessionId: "s", bgId: "fe6d8df0" });
+    const r = await spawnSession(input, { run, inventory: { waitFor } as unknown as Pick<Inventory, "waitFor"> });
+    expect(r.bgId).toBe("fe6d8df0");
+  });
+
+  it("waitFor rejeitado → SessionNotVisibleError com bgId", async () => {
+    const run = vi.fn().mockResolvedValue(ok(OK_OUT));
+    const waitFor = vi.fn().mockRejectedValue(new Error("timeout"));
+    const e = await spawnSession(input, { run, inventory: { waitFor } as unknown as Pick<Inventory, "waitFor"> }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SessionNotVisibleError);
+    expect((e as SessionNotVisibleError).bgId).toBe("85285a68");
+    expect((e as Error).message).toContain("claude attach 85285a68");
   });
 
   it("usa a linha `claude attach` como fallback", async () => {

@@ -11,17 +11,22 @@ describe.skipIf(!E2E)("spawn e2e (real)", () => {
     const inventory = new Inventory({ pollMs: 1000 });
     inventory.start();
     const root = new URL("../../..", import.meta.url).pathname;
-    const { sessionId, bgId } = await spawnSession(
-      { cwd: root, name: "ga-spawn-e2e", prompt: "Responda apenas OK.", permissionMode: "plan" },
-      { run: runClaude, inventory },
-    );
-    inventory.stop();
+    let bgId: string | undefined;
     try {
+      const r = await spawnSession(
+        { cwd: root, name: "ga-spawn-e2e", prompt: "Responda apenas OK.", permissionMode: "plan" },
+        { run: runClaude, inventory },
+      );
+      bgId = r.bgId;
+      const sessionId = r.sessionId;
       expect(bgId).toMatch(/^[0-9a-f]{8}$/);
       expect(sessionId.startsWith(bgId)).toBe(true);
     } finally {
-      await stopSession(bgId, { run: runClaude });
-      await runClaude(["rm", bgId]);
+      inventory.stop();
+      if (bgId !== undefined) {
+        await stopSession(bgId, { run: runClaude });
+        await runClaude(["rm", bgId]);
+      }
     }
   }, 120000);
 });
