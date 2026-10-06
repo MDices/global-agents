@@ -13,9 +13,9 @@ describe("parseAgentsJson", () => {
   it("normaliza a saída do linux", () => {
     const list = parseAgentsJson(linux);
     expect(list).toHaveLength(3);
-    expect(list[2]).toMatchObject({ bgId: "85285a68", kind: "background", status: "waiting", waitingFor: "permission prompt" });
-    const interactive = list.find((s) => s.kind === "interactive");
-    expect(interactive?.name).toBe("correcoes-bugs");
+    expect(list.find((x) => x.bgId === "85285a68")).toMatchObject({ bgId: "85285a68", kind: "background", status: "waiting", waitingFor: "permission prompt" });
+    const interactive = list.find((x) => x.name === "correcoes-bugs");
+    expect(interactive?.kind).toBe("interactive");
     expect(interactive).not.toHaveProperty("bgId");
   });
 
