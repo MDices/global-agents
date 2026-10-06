@@ -2,7 +2,7 @@ import {
   newEnvelope, type AgentEvent, type PermissionBehavior, type RelayCommand, type SessionInfo, type SlashCommandName,
 } from "@global-agents/protocol";
 import type { InboxTarget } from "../claude/inject.js";
-import { BUSY_TEXT, SLASH_WHILE_BUSY } from "../claude/slash.js";
+import { BUSY_TEXT, SLASH_WHILE_BUSY } from "../claude/slash-rules.js";
 import type { SessionRegistry } from "../claude/registry.js";
 import type { SpawnInput } from "../claude/spawn.js";
 

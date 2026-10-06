@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { dialogRegion, isBusyScreen, runSlash, type PtyProcess, type SlashTimeouts, type SpawnPty, type SpawnPtyOptions } from "../src/claude/slash.js";
+import { dialogRegion, hasInputPrompt, isBusyScreen, runSlash, type PtyProcess, type SlashTimeouts, type SpawnPty, type SpawnPtyOptions } from "../src/claude/slash.js";
 
 /** Tempos curtos para os testes (os reais estão em `DEFAULT_TIMEOUTS`). */
 const T: Partial<SlashTimeouts> = {
@@ -25,6 +25,8 @@ interface Script {
   onEnter?: (typed: string, pty: FakePty) => void;
   /** Sai com código 0 ao receber `\x1a` (padrão: sim). */
   exitOnCtrlZ?: boolean;
+  /** Reação a Esc (padrão: nada). */
+  onEsc?: (pty: FakePty) => void;
   /** Sai sozinho logo depois do spawn com este código. */
   exitAtStart?: number;
 }
@@ -60,7 +62,9 @@ class FakePty implements PtyProcess {
       this.script.onEnter?.(typed, this);
     } else if (data === "\x1a") {
       if (this.script.exitOnCtrlZ ?? true) setTimeout(() => { this.exit(0); }, 5);
-    } else if (data !== ESC) {
+    } else if (data === ESC) {
+      this.script.onEsc?.(this);
+    } else {
       this.typed += data;
       this.emit(data); // eco
     }
@@ -251,6 +255,35 @@ describe("runSlash", () => {
     expect(f.ptys[0]?.writes.join("")).toBe("/compact\r\x1a");
   });
 
+  it.each(["model", "hooks"])("diálogo órfão do /%s na abertura: Esc primeiro, nada digitado com ele aberto, comando só na tela ociosa", async (name) => {
+    let open = true;
+    const typedWhileOpen: string[] = [];
+    const f = fake({
+      initial: draw(name),
+      onEsc: (p) => { if (open) { open = false; setTimeout(() => { p.emit(draw("idle")); }, 5); } },
+      onEnter: (typed, p) => { if (open) typedWhileOpen.push(typed); usageOutput(typed, p); },
+    });
+    await runSlash({ bgId: "b1", command: "usage", timeouts: T }, { spawnPty: f.spawnPty });
+    const w = f.ptys[0]?.writes ?? [];
+    expect(w[0]).toBe("\x1b");
+    expect(w.join("")).toBe("\x1b/usage\r\x1a");
+    expect(typedWhileOpen).toEqual([]);
+  });
+
+  it("diálogo órfão que não fecha com 2 Esc → erro com claude attach <bgId>, nada digitado, sai só com Ctrl+Z", async () => {
+    const f = fake({ initial: draw("model") });
+    await expect(runSlash({ bgId: "cafe1234", command: "status", timeouts: T }, { spawnPty: f.spawnPty }))
+      .rejects.toThrow("há um diálogo aberto na sessão; abra com claude attach cafe1234 e feche-o");
+    expect(f.ptys[0]?.writes).toEqual(["\x1b", "\x1b", "\x1a"]);
+  });
+
+  it("diálogo não reconhecido com ❯ dentro (sem caixa de input): nada digitado, tempo esgotado", async () => {
+    const f = fake({ initial: `${ESC}[2J${ESC}[H${"▔".repeat(60)}\r\n   Algo novo\r\n   ❯ 1. Opção\r\n     2. Outra` });
+    await expect(runSlash({ bgId: "b1", command: "status", timeouts: { ...T, readyMs: 200 } }, { spawnPty: f.spawnPty }))
+      .rejects.toThrow(/tempo esgotado esperando a sessão abrir/);
+    expect(f.ptys[0]?.writes).toEqual(["\x1a"]);
+  });
+
   it("spawn que lança → rejeita com a mensagem", async () => {
     const spawnPty: SpawnPty = () => { throw new Error("posix_spawnp failed"); };
     await expect(runSlash({ bgId: "b1", command: "usage", timeouts: T }, { spawnPty })).rejects.toThrow(/posix_spawnp failed/);
@@ -258,7 +291,7 @@ describe("runSlash", () => {
 
   it("tela longa: só as últimas 60 linhas, sem linhas vazias no fim", async () => {
     const lines = Array.from({ length: 100 }, (_v, i) => `item ${i + 1}`).join("\r\n");
-    const f = fake({ initial: `❯ \r\n`, onEnter: (_t, p) => { p.emit(`\r\n${lines}\r\n\r\n\r\n`); } });
+    const f = fake({ initial: `────\r\n❯ \r\n`, onEnter: (_t, p) => { p.emit(`\r\n${lines}\r\n\r\n\r\n`); } });
     const { screen } = await runSlash({ bgId: "b1", command: "context", timeouts: T }, { spawnPty: f.spawnPty });
     const out = screen.split("\n");
     expect(out.length).toBeLessThanOrEqual(60);
@@ -277,6 +310,13 @@ describe("detecção nas telas reais (2.1.292)", () => {
     expect(region?.split("\n")[0]).toMatch(/^▔{8,}/);
     expect(isBusyScreen(fixtureLines(name))).toBe(false);
   });
+  it("prompt de input: só o ❯ logo abaixo da borda ─ da caixa (nem transcript, nem cursor de diálogo)", () => {
+    expect(hasInputPrompt(fixtureLines("idle"))).toBe(true);
+    expect(hasInputPrompt(fixtureLines("busy"))).toBe(true);
+    for (const name of ["status", "usage", "hooks", "model"]) expect(hasInputPrompt(fixtureLines(name))).toBe(false);
+    expect(hasInputPrompt(["❯ Responda apenas OK.", "● OK"])).toBe(false);
+  });
+
   it("borda ▔ sem rodapé nem abas não conta como diálogo", () => {
     expect(dialogRegion(["texto", "▔".repeat(40) + " ◐ medium · /effort ▔", "❯ "])).toBeUndefined();
   });

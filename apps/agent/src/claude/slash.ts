@@ -2,6 +2,9 @@ import xtermHeadless from "@xterm/headless";
 import * as nodePty from "node-pty";
 import type { SlashCommandName } from "@global-agents/protocol";
 import { cleanEnv } from "./exec.js";
+import { BUSY_TEXT, SLASH_WHILE_BUSY } from "./slash-rules.js";
+
+export { BUSY_TEXT, SLASH_WHILE_BUSY };
 
 // `@xterm/headless` é um bundle CommonJS: o import nomeado não resolve em ESM.
 const { Terminal } = xtermHeadless;
@@ -21,9 +24,8 @@ const DIALOG_BORDER = /▔{8,}/;
 const DIALOG_MARKS = [/esc to (cancel|close)/i, /Settings\s+Status\s+Config/];
 /** Turno em andamento: spinner `✢ Sublimating… (3s · ↓ 117 tokens)` (intermitente) ou `esc to interrupt`. */
 const BUSY_MARKS = [/…\s*\(\d+s\b/, /esc to interrupt/i];
-/** Comandos que não mexem na conversa: podem rodar com a sessão ocupada. */
-export const SLASH_WHILE_BUSY: ReadonlySet<SlashCommandName> = new Set(["usage", "cost", "status"]);
-export const BUSY_TEXT = "sessão ocupada; tente quando o turno terminar";
+/** Esc mandados no máximo para fechar um diálogo deixado aberto na sessão. */
+const ORPHAN_ESC_MAX = 2;
 
 export interface SlashTimeouts {
   /** Teto para a sessão abrir (prompt `❯` na tela). */
@@ -107,10 +109,17 @@ export function dialogRegion(lines: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * O `❯` da caixa de input: logo abaixo da borda `─` da caixa. Não casa o `❯` dos prompts antigos no transcript nem o
+ * cursor de seleção dentro de diálogos (`/model`, `/hooks`), que substituem a caixa enquanto estão abertos.
+ */
+export function hasInputPrompt(lines: string[]): boolean {
+  return lines.some((l, i) => l.trimStart().startsWith(PROMPT_MARK) && (lines[i - 1] ?? "").trimStart().startsWith("─"));
+}
+
 /** A tela mostra um turno em andamento (spinner ou `esc to interrupt`). */
 export const isBusyScreen = (lines: string[]): boolean => lines.some((l) => BUSY_MARKS.some((m) => m.test(l)));
 
-const hasPrompt = (lines: string[]): boolean => lines.some((l) => l.trimStart().startsWith(PROMPT_MARK));
 
 /**
  * Roda um slash command do Claude Code numa sessão em background: abre `claude attach <bgId>` num pty, espera o
@@ -155,9 +164,13 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
    * `usage`/`cost`/`status` aceitam o atalho "`❯` na tela há `readyQuietMs`".
    */
   const strict = !SLASH_WHILE_BUSY.has(input.command);
+  /** Um diálogo resistiu aos Esc: o detach não manda mais nenhum. */
+  let skipEsc = false;
   const waitReady = async (): Promise<void> => {
     const deadline = Date.now() + t.readyMs;
     let promptSince: number | undefined;
+    let escSent = 0;
+    let lastEscAt = 0;
     for (;;) {
       if (exitCode !== undefined) {
         const last = await lastLine();
@@ -166,7 +179,19 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
       const now = Date.now();
       const lines = await renderLines(term);
       if (strict && isBusyScreen(lines)) throw new Error(BUSY_TEXT);
-      if (hasPrompt(lines)) {
+      // Diálogo deixado aberto por outro attach: digitar nele escolheria opções (no /model, Enter troca o modelo).
+      if (dialogRegion(lines) !== undefined) {
+        promptSince = undefined;
+        if (escSent === 0 || now - lastEscAt >= t.readyQuietMs) {
+          if (escSent >= ORPHAN_ESC_MAX) {
+            skipEsc = true;
+            throw new Error(`há um diálogo aberto na sessão; abra com claude attach ${input.bgId} e feche-o`);
+          }
+          send("\x1b");
+          escSent++;
+          lastEscAt = now;
+        }
+      } else if (hasInputPrompt(lines)) {
         promptSince ??= now;
         if (now - lastData >= t.readyQuietMs || (!strict && now - promptSince >= t.readyQuietMs)) return;
       }
@@ -209,7 +234,7 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
   const detach = async (): Promise<void> => {
     if (exitCode !== undefined) return;
     // Esc só fecha diálogo: sem diálogo na tela ele interromperia um turno em andamento.
-    if (dialogRegion(await renderLines(term)) !== undefined) {
+    if (!skipEsc && dialogRegion(await renderLines(term)) !== undefined) {
       send("\x1b");
       await sleep(t.escGapMs);
     }
