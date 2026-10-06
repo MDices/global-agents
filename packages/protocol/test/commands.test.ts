@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RelayCommandSchema, newEnvelope } from "../src/index.js";
+import { RelayCommandSchema, SLASH_ALLOWLIST, newEnvelope } from "../src/index.js";
 const env = () => newEnvelope("relay/vps");
 describe("comandos", () => {
   it("session.create exige cwd, name, prompt e permissionMode válido", () => {
@@ -12,5 +12,25 @@ describe("comandos", () => {
   });
   it("permission.decide só aceita allow|deny", () => {
     expect(RelayCommandSchema.safeParse({ ...env(), type: "permission.decide", commandId: "c", requestId: "r", behavior: "maybe" }).success).toBe(false);
+  });
+  describe("session.slash", () => {
+    const slash = (over: Record<string, unknown>) => ({ ...env(), type: "session.slash", commandId: "c", sessionId: "s", command: "compact", ...over });
+    it("allowlist fechada", () => {
+      expect(SLASH_ALLOWLIST).toEqual(["compact", "usage", "cost", "hooks", "status", "context", "model"]);
+    });
+    it("compact (com e sem args) é válido", () => {
+      expect(RelayCommandSchema.safeParse(slash({})).success).toBe(true);
+      expect(RelayCommandSchema.safeParse(slash({ args: "foco em testes" })).success).toBe(true);
+    });
+    it("comando fora da allowlist é inválido", () => {
+      expect(RelayCommandSchema.safeParse(slash({ command: "clear" })).success).toBe(false);
+      expect(RelayCommandSchema.safeParse(slash({ command: "exit" })).success).toBe(false);
+    });
+    it("args com 501 chars ou quebra de linha é inválido", () => {
+      expect(RelayCommandSchema.safeParse(slash({ args: "a".repeat(500) })).success).toBe(true);
+      expect(RelayCommandSchema.safeParse(slash({ args: "a".repeat(501) })).success).toBe(false);
+      expect(RelayCommandSchema.safeParse(slash({ args: "a\nb" })).success).toBe(false);
+      expect(RelayCommandSchema.safeParse(slash({ args: "a\rb" })).success).toBe(false);
+    });
   });
 });
