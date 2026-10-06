@@ -177,6 +177,8 @@ export interface Db {
   sessions: {
     upsert(s: SessionInput): void;
     get(sessionId: string): Session | undefined;
+    /** Sessão ligada à thread do Discord (a mais recente, se houver mais de uma). */
+    getByThread(threadId: string): Session | undefined;
     setThread(sessionId: string, threadId: string): void;
     setState(sessionId: string, state: string, updatedAt: number): void;
     listByMachine(machine: string): Session[];
@@ -189,7 +191,8 @@ export interface Db {
   };
   pendingCommands: {
     add(c: { commandId: string; machine: string; payload: string; createdAt: number; expiresAt: number; discordMessageId?: string }): void;
-    listDue(machine: string): PendingCommand[];
+    /** Comandos ainda válidos da máquina (`expires_at >= now`), em ordem de chegada. */
+    listDue(machine: string, now?: number): PendingCommand[];
     remove(commandId: string): void;
     expireBefore(ts: number): PendingCommand[];
   };
@@ -289,6 +292,10 @@ export function openDb(path: string): Db {
         const r = get("SELECT * FROM sessions WHERE session_id = ?", sessionId);
         return r && toSession(r);
       },
+      getByThread(threadId) {
+        const r = get("SELECT * FROM sessions WHERE thread_id = ? ORDER BY updated_at DESC LIMIT 1", threadId);
+        return r && toSession(r);
+      },
       setThread(sessionId, threadId) {
         run("UPDATE sessions SET thread_id = ? WHERE session_id = ?", threadId, sessionId);
       },
@@ -319,8 +326,11 @@ export function openDb(path: string): Db {
           c.commandId, c.machine, c.payload, c.createdAt, c.expiresAt, c.discordMessageId ?? null,
         );
       },
-      listDue: (machine) =>
-        all("SELECT * FROM pending_commands WHERE machine = ? ORDER BY created_at, rowid", machine).map(toCommand),
+      // Complemento exato de `expireBefore` (`<`): nenhuma linha é ao mesmo tempo devida e expirada.
+      listDue: (machine, now = Date.now()) =>
+        all(
+          "SELECT * FROM pending_commands WHERE machine = ? AND expires_at >= ? ORDER BY created_at, rowid", machine, now,
+        ).map(toCommand),
       remove(commandId) {
         run("DELETE FROM pending_commands WHERE command_id = ?", commandId);
       },

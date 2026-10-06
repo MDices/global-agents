@@ -6,7 +6,10 @@ export type FakeCall =
   | { op: "renameThread"; threadId: string; name: string }
   | { op: "post"; targetId: string; text: string }
   | { op: "postEmbed"; targetId: string; embed: EmbedSpec }
-  | { op: "editChannelTopic"; channelId: string; topic: string };
+  | { op: "editChannelTopic"; channelId: string; topic: string }
+  | { op: "react"; channelId: string; messageId: string; emoji: string }
+  | { op: "removeReaction"; channelId: string; messageId: string; emoji: string }
+  | { op: "reply"; channelId: string; messageId: string; text: string };
 
 /** Implementação de `DiscordPort` em memória que grava todas as chamadas, para testes sem rede. */
 export class FakeDiscordPort implements DiscordPort {
@@ -74,5 +77,18 @@ export class FakeDiscordPort implements DiscordPort {
     } finally {
       this.topicsInFlight--;
     }
+  }
+
+  async react(channelId: string, messageId: string, emoji: string): Promise<void> {
+    this.calls.push({ op: "react", channelId, messageId, emoji });
+  }
+
+  async removeReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    this.calls.push({ op: "removeReaction", channelId, messageId, emoji });
+  }
+
+  async reply(channelId: string, messageId: string, text: string): Promise<{ messageId: string }> {
+    this.calls.push({ op: "reply", channelId, messageId, text });
+    return { messageId: `msg-${++this.seq}` };
   }
 }

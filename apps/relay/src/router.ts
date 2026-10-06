@@ -165,7 +165,7 @@ export function createRouter(deps: RouterDeps): Router {
   };
 
   const onPrompt = async (machine: string, e: EventOf<"turn.prompt">): Promise<void> => {
-    if (e.source !== "terminal") return; // prompt remoto: a resposta à mensagem do usuário fica para o T18
+    if (e.source !== "terminal") return; // prompt remoto: a própria mensagem do usuário já está na thread (reação no ack)
     await postAll(await threadFor(machine, e.sessionId), quotePrompt(e.text));
   };
 
@@ -186,7 +186,7 @@ export function createRouter(deps: RouterDeps): Router {
       case "turn.prompt": return onPrompt(machine, e);
       case "turn.reply": return onReply(machine, e);
       case "agent.warning": return onWarning(machine, e);
-      default: return Promise.resolve(); // permissões e acks: tarefas seguintes
+      default: return Promise.resolve(); // acks: ponte de comandos (commands.ts); permissões: tarefas seguintes
     }
   };
 

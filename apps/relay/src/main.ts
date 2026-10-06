@@ -2,6 +2,9 @@ import { accessSync, constants, mkdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
+import { Events, type Client, type Message } from "discord.js";
+import type { AgentEvent } from "@global-agents/protocol";
+import { createCommandBridge } from "./commands.js";
 import { loadRelayConfig, type LogLevel, type RelayConfig } from "./config.js";
 import { openDb, relayDbPath } from "./db.js";
 import { createBot, DiscordJsPort, type DiscordPort } from "./discord/bot.js";
@@ -93,6 +96,7 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     cleanup.push(() => { hub.close(); });
 
     let port = deps.port;
+    let client: Client | undefined;
     if (port === undefined) {
       const bot = createBot(cfg, (m) => { log("error", m); });
       // Logo acima do `db.close`: o bot é o penúltimo a sair (depois do servidor e da drenagem da fila).
@@ -100,20 +104,51 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
       await bot.ready;
       log("info", `discord: conectado como ${bot.client.user?.tag ?? "?"}`);
       port = new DiscordJsPort(bot.client, cfg.guildId, cfg.categoryName);
+      client = bot.client;
     }
 
     const routerLog = (m: string): void => { log("warn", m); };
     const threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log: routerLog });
     const router = createRouter({ db, port, threads, hub, log: routerLog });
+    const bridge = createCommandBridge({ db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
     // Com hub e servidor já fechados, espera (com teto) o que já estava na fila ir para o Discord, antes de
     // derrubar o bot e fechar o banco: fica logo acima do bot (ou do `db.close`, quando a porta é injetada).
     cleanup.splice(deps.port === undefined ? 2 : 1, 0, async () => {
       let timer: NodeJS.Timeout | undefined;
-      await Promise.race([router.idle(), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
+      await Promise.race([Promise.all([router.idle(), bridge.idle()]), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
       clearTimeout(timer);
     });
     cleanup.push(() => { threads.dispose(); });
     cleanup.push(() => { router.dispose(); });
+
+    // Mensagens nas threads viram `session.send`; acks reagem na mensagem; a fila drena quando a máquina conecta.
+    const onAgentEvent = (machine: string, ev: AgentEvent): void => {
+      if (ev.type === "command.ack" || ev.type === "command.error") void bridge.onAck(machine, ev);
+    };
+    const onMachineOnline = (machine: string): void => { void bridge.onMachineOnline(machine); };
+    hub.on("event", onAgentEvent);
+    hub.on("online", onMachineOnline);
+    bridge.start();
+    cleanup.push(() => {
+      bridge.dispose();
+      hub.off("event", onAgentEvent);
+      hub.off("online", onMachineOnline);
+    });
+    if (client !== undefined) {
+      const discord = client;
+      const onMessage = (message: Message): void => {
+        if (!message.channel.isThread()) return;
+        void bridge.onThreadMessage({
+          authorId: message.author.id,
+          threadId: message.channelId,
+          messageId: message.id,
+          content: message.content,
+          isBot: message.author.bot || message.system, // mensagens de sistema nunca viram prompt
+        });
+      };
+      discord.on(Events.MessageCreate, onMessage);
+      cleanup.push(() => { discord.off(Events.MessageCreate, onMessage); });
+    }
 
     await new Promise<void>((resolve, reject) => {
       const onError = (e: Error): void => { server.off("listening", onListening); reject(e); };

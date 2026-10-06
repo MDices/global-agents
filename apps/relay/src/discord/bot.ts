@@ -7,6 +7,7 @@ import {
   ThreadAutoArchiveDuration,
   type CategoryChannel,
   type Guild,
+  type Message,
   type MessageCreateOptions,
   type TextChannel,
 } from "discord.js";
@@ -43,6 +44,12 @@ export interface DiscordPort {
   post(threadOrChannelId: string, text: string): Promise<{ messageId: string }>;
   postEmbed(threadOrChannelId: string, embed: EmbedSpec): Promise<{ messageId: string }>;
   editChannelTopic(channelId: string, topic: string): Promise<void>;
+  /** Reage com `emoji` (unicode) à mensagem `messageId` do canal/thread. */
+  react(channelId: string, messageId: string, emoji: string): Promise<void>;
+  /** Remove só a reação `emoji` do próprio bot; não faz nada se ela não existir. */
+  removeReaction(channelId: string, messageId: string, emoji: string): Promise<void>;
+  /** Responde (reply do Discord) à mensagem `messageId`; se ela sumiu, posta sem a referência. */
+  reply(channelId: string, messageId: string, text: string): Promise<{ messageId: string }>;
 }
 
 export function createBot(
@@ -117,6 +124,30 @@ export class DiscordJsPort implements DiscordPort {
     const channel = await this.textChannel(channelId);
     // Edição de canal tem rate limit apertado (~2 a cada 10 min): não gasta com tópico igual.
     if (channel.topic !== topic) await channel.setTopic(topic);
+  }
+
+  async react(channelId: string, messageId: string, emoji: string): Promise<void> {
+    const message = await this.message(channelId, messageId);
+    await message.react(emoji);
+  }
+
+  async removeReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    const message = await this.message(channelId, messageId);
+    await message.reactions.resolve(emoji)?.users.remove(); // sem argumento: a reação do próprio bot
+  }
+
+  reply(channelId: string, messageId: string, text: string): Promise<{ messageId: string }> {
+    return this.send(channelId, {
+      content: text,
+      reply: { messageReference: messageId, failIfNotExists: false },
+      allowedMentions: NO_MENTIONS,
+    });
+  }
+
+  private async message(channelId: string, messageId: string): Promise<Message> {
+    const ch = await this.client.channels.fetch(channelId);
+    if (ch === null || !ch.isTextBased()) throw new Error(`canal ${channelId} não tem mensagens`);
+    return ch.messages.fetch(messageId);
   }
 
   private async ensureCategory(guild: Guild): Promise<CategoryChannel> {

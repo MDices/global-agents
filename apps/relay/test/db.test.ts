@@ -80,6 +80,16 @@ describe("sessions", () => {
     db.sessions.upsert({ sessionId: "d", machine: "x/y", state: "idle", updatedAt: 9 });
     expect(db.sessions.listByMachine("m/u").map((s) => s.sessionId)).toEqual(["b", "c", "a"]);
   });
+
+  it("getByThread acha a sessão pela thread do Discord", () => {
+    const db = openDb(":memory:");
+    db.sessions.upsert({ sessionId: "s1", machine: "m/u", name: "um", state: "idle", updatedAt: 1, threadId: "t1" });
+    db.sessions.upsert({ sessionId: "s2", machine: "x/y", name: "dois", state: "idle", updatedAt: 2, threadId: "t2" });
+    db.sessions.upsert({ sessionId: "s3", machine: "x/y", state: "idle", updatedAt: 3 });
+    expect(db.sessions.getByThread("t2")).toMatchObject({ sessionId: "s2", machine: "x/y", name: "dois" });
+    expect(db.sessions.getByThread("t1")?.sessionId).toBe("s1");
+    expect(db.sessions.getByThread("nenhuma")).toBeUndefined();
+  });
 });
 
 describe("permissions", () => {
@@ -106,10 +116,10 @@ describe("pendingCommands", () => {
     db.pendingCommands.add({ commandId: "c1", machine: "m/u", payload: "{}", createdAt: 1, expiresAt: 100 });
     db.pendingCommands.add({ commandId: "c2", machine: "m/u", payload: "{}", createdAt: 2, expiresAt: 100, discordMessageId: "d" });
     db.pendingCommands.add({ commandId: "c3", machine: "o/o", payload: "{}", createdAt: 3, expiresAt: 100 });
-    expect(db.pendingCommands.listDue("m/u").map((c) => c.commandId)).toEqual(["c1", "c2"]);
-    expect(db.pendingCommands.listDue("m/u")[1]?.discordMessageId).toBe("d");
+    expect(db.pendingCommands.listDue("m/u", 50).map((c) => c.commandId)).toEqual(["c1", "c2"]);
+    expect(db.pendingCommands.listDue("m/u", 50)[1]?.discordMessageId).toBe("d");
     db.pendingCommands.remove("c1");
-    expect(db.pendingCommands.listDue("m/u").map((c) => c.commandId)).toEqual(["c2"]);
+    expect(db.pendingCommands.listDue("m/u", 50).map((c) => c.commandId)).toEqual(["c2"]);
   });
 
   it("expireBefore remove e devolve os expirados", () => {
@@ -119,7 +129,26 @@ describe("pendingCommands", () => {
     const removed = db.pendingCommands.expireBefore(50);
     expect(removed.map((c) => c.commandId)).toEqual(["old"]);
     expect(removed[0]?.discordMessageId).toBe("dm");
-    expect(db.pendingCommands.listDue("m/u").map((c) => c.commandId)).toEqual(["new"]);
+    expect(db.pendingCommands.listDue("m/u", 50).map((c) => c.commandId)).toEqual(["new"]);
+  });
+
+  it("listDue devolve só os não expirados, em ordem de chegada (FIFO)", () => {
+    const db = openDb(":memory:");
+    db.pendingCommands.add({ commandId: "b", machine: "m/u", payload: "{}", createdAt: 2, expiresAt: 1000 });
+    db.pendingCommands.add({ commandId: "velho", machine: "m/u", payload: "{}", createdAt: 1, expiresAt: 10 });
+    db.pendingCommands.add({ commandId: "a", machine: "m/u", payload: "{}", createdAt: 1, expiresAt: 1000 });
+    db.pendingCommands.add({ commandId: "c", machine: "m/u", payload: "{}", createdAt: 2, expiresAt: 1000 });
+    expect(db.pendingCommands.listDue("m/u", 50).map((c) => c.commandId)).toEqual(["a", "b", "c"]);
+    // `expires_at` igual a agora ainda vale (expireBefore usa `<`): nenhuma linha é ao mesmo tempo devida e expirada.
+    expect(db.pendingCommands.listDue("m/u", 10).map((c) => c.commandId)).toEqual(["velho", "a", "b", "c"]);
+  });
+
+  it("listDue sem `now` usa o relógio atual", () => {
+    const db = openDb(":memory:");
+    const now = Date.now();
+    db.pendingCommands.add({ commandId: "vencido", machine: "m/u", payload: "{}", createdAt: now - 10, expiresAt: now - 1 });
+    db.pendingCommands.add({ commandId: "vale", machine: "m/u", payload: "{}", createdAt: now, expiresAt: now + 3_600_000 });
+    expect(db.pendingCommands.listDue("m/u").map((c) => c.commandId)).toEqual(["vale"]);
   });
 });
 
