@@ -259,6 +259,41 @@ describe("createAgent", () => {
     expect(client.types()).not.toContain("permission.resolved");
   });
 
+  it("evento de hook que chega logo depois do listen (antes do fim do start) não se perde: vai ao cliente", async () => {
+    const { client } = await setup({
+      hookServer: async (o: HookServerOptions) => {
+        let processed!: () => void;
+        const done = new Promise<void>((r) => { processed = r; });
+        const s = await startHookServer({ ...o, onEvents: (evs) => { o.onEvents(evs); processed(); } });
+        const res = await fetch(`http://127.0.0.1:${s.port}/hook`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "Stop", last_assistant_message: "cedo" }),
+        });
+        expect(res.status).toBe(204);
+        await done;
+        return s;
+      },
+    });
+    expect(client.sent.find((e) => e.type === "turn.reply")).toMatchObject({ sessionId: "s1", text: "cedo" });
+  });
+
+  it("falha ao subir o servidor de hooks: start() rejeita e o cliente criado antes é parado, sem conectar", async () => {
+    let client: FakeClient | undefined;
+    const started = vi.fn();
+    const a = createAgent(
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], port: 0, claudeBin: "claude", dataDir: dir },
+      {
+        inventory: new FakeInventory(),
+        client: (opts) => { client = new FakeClient(opts); client.start = started; return client; },
+        hookServer: () => Promise.reject(new Error("EADDRINUSE")),
+        run: fakeRun,
+      },
+    );
+    await expect(a.start()).rejects.toThrow("EADDRINUSE");
+    expect(client?.stopped).toBe(true);
+    expect(started).not.toHaveBeenCalled();
+  });
+
   it("stop() para inventário, servidor de hooks e cliente", async () => {
     const { a, client, inventory, post } = await setup();
     await a.stop();

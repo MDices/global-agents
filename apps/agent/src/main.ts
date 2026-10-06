@@ -179,16 +179,9 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
         ...(deps.teamsDir !== undefined ? { teamsDir: deps.teamsDir } : {}),
       });
       team = tracker;
-      hookServer = await hookServerFactory({
-        port: cfg.port,
-        machine,
-        lookupName,
-        isKnownSession,
-        onEvents: (evs) => { for (const ev of evs) client?.send(ev); },
-        onTeamPayload: (payload, teammate) => { tracker.observe(payload, teammate); },
-        onPermission: (payload, respond, signal) => { permissions.open(payload, respond, signal); },
-      });
 
+      // Outbox e cliente existem antes do servidor de hooks escutar: um evento (inclusive `permission.request`) que
+      // chegue logo depois do `listen` vai para o outbox (o cliente ainda não conectado grava lá) em vez de se perder.
       const outbox = new Outbox(cfg.dataDir, {
         onSkip: (_line, error) => { console.warn(`global-agents: linha inválida descartada do outbox (${error})`); },
       });
@@ -202,6 +195,22 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       client = c;
       c.on("command", onCommand);
       c.on("warning", (msg) => { console.warn(`global-agents: ${msg}`); });
+
+      try {
+        hookServer = await hookServerFactory({
+          port: cfg.port,
+          machine,
+          lookupName,
+          isKnownSession,
+          onEvents: (evs) => { for (const ev of evs) client?.send(ev); },
+          onTeamPayload: (payload, teammate) => { tracker.observe(payload, teammate); },
+          onPermission: (payload, respond, signal) => { permissions.open(payload, respond, signal); },
+        });
+      } catch (e) {
+        c.stop();
+        client = undefined;
+        throw e;
+      }
       c.start();
 
       inventory.on("error", onInventoryError);
