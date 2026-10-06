@@ -141,6 +141,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
   };
 
   const onChanged = (sessions: SessionInfo[]): void => {
+    team?.syncInventory(sessions.map((s) => s.sessionId));
     client?.send({ ...newEnvelope(machine), type: "session.list", sessions });
   };
   const onInventoryError = (e: unknown): void => {

@@ -8,6 +8,10 @@ import { z } from "zod";
 export const TEAM_UPDATE_DEBOUNCE_MS = 2000;
 /** Tamanho máximo do texto do `teammate_reply`. */
 export const TEAMMATE_REPLY_MAX = 300;
+/** Payloads guardados por sessão de teammate ainda sem prova de time. */
+export const DEFERRED_MAX = 20;
+/** Validade dos payloads guardados. */
+export const DEFERRED_TTL_MS = 600_000;
 
 export interface TeamTimers {
   setTimeout(fn: () => void, ms: number): unknown;
@@ -24,6 +28,8 @@ export interface TeamTrackerOptions {
   debounceMs?: number;
   /** Relógio dos timers (padrão: os globais, com `unref`). */
   timers?: TeamTimers;
+  /** Relógio da expiração dos pendentes (padrão `Date.now`). */
+  now?: () => number;
 }
 
 const ConfigSchema = z.object({
@@ -43,6 +49,7 @@ interface Lead {
   timer: unknown;
 }
 interface Teammate { leadId: string | undefined; name: string | undefined; pendingReply: string | undefined }
+interface Deferred { since: number; payloads: { event: string; p: Record<string, unknown> }[] }
 
 const defaultTimers: TeamTimers = {
   setTimeout: (fn, ms) => {
@@ -69,11 +76,15 @@ function cut(text: string, max: number): string {
  * - Teammate → líder: `config.json` do time (`<teamsDir>/<team>/config.json`, só se o `leadSessionId` for uma
  *   sessão já vista como líder ou conhecida do inventário: diretórios velhos ficam no disco); senão o prefixo
  *   `session-<8 primeiros do id do líder>` do `team_name` entre os líderes vistos; senão o líder que por último
- *   emitiu `TaskCreated`/`UserPromptSubmit`.
+ *   emitiu `TaskCreated`/`UserPromptSubmit` — mas só com prova de time: `team_name`/`teammate_name` no payload ou
+ *   um `config.json` com teammates para esse líder. Sem prova (ex.: `claude --agent` antes do poll do inventário),
+ *   os payloads da sessão ficam guardados (até 20, por 10 min) e são reaplicados quando a prova chegar.
+ * - Sessão que se mostra líder (hook sem marca de teammate) sai de `mates` e dos pendentes.
  * - Nome do teammate: `teammate_name` (TeammateIdle/TaskCompleted) ou, com o `config.json`, por eliminação (um só
  *   membro sem sessão e uma só sessão sem nome). A fala de um `Stop` sem nome espera o nome chegar.
- * - O painel (`team.update`) só existe quando o líder tem teammate; tarefas criadas antes disso são anunciadas na
- *   ativação. Emissão com debounce de 2 s; `SessionEnd` do líder descarrega na hora e esquece o time.
+ * - O painel (`team.update`) só existe quando o líder tem teammate e pelo menos um membro; tarefas criadas antes
+ *   disso são anunciadas na ativação. Emissão com debounce de 2 s; `SessionEnd` do líder (ou o líder sumir do
+ *   inventário, `syncInventory`) descarrega na hora e esquece o time.
  */
 export class TeamTracker {
   private readonly machine: string;
@@ -84,6 +95,10 @@ export class TeamTracker {
   private readonly timers: TeamTimers;
   private readonly leads = new Map<string, Lead>();
   private readonly mates = new Map<string, Teammate>();
+  private readonly deferred = new Map<string, Deferred>();
+  /** Sessões do último `syncInventory` (só quem já esteve no inventário pode ser esquecido por sumir dele). */
+  private inventoried = new Set<string>();
+  private readonly now: () => number;
   /** Sessões vistas como líder (hooks sem marca de teammate), candidatas ao prefixo do `team_name`. */
   private readonly seenLeads = new Set<string>();
   private lastActiveLead: string | undefined;
@@ -96,6 +111,7 @@ export class TeamTracker {
     this.teamsDir = opts.teamsDir ?? join(homedir(), ".claude", "teams");
     this.debounceMs = opts.debounceMs ?? TEAM_UPDATE_DEBOUNCE_MS;
     this.timers = opts.timers ?? defaultTimers;
+    this.now = opts.now ?? Date.now;
   }
 
   /** Um payload de hook; `teammate` vem de `isTeammatePayload`. Nunca lança. */
@@ -106,6 +122,7 @@ export class TeamTracker {
     const event = str(p["hook_event_name"]);
     if (sid === undefined || event === undefined) return;
     try {
+      this.expireDeferred();
       if (teammate && !this.seenLeads.has(sid)) this.onTeammate(sid, event, p);
       else this.onLead(sid, event, p);
     } catch {
@@ -118,6 +135,22 @@ export class TeamTracker {
     for (const lead of this.leads.values()) if (lead.timer !== undefined) this.emitUpdate(lead);
   }
 
+  /**
+   * Sessões vivas no inventário (a cada `changed`). Líder que estava no inventário e sumiu é esquecido como no
+   * `SessionEnd`; quem nunca apareceu nele (lag do poll) é mantido.
+   */
+  syncInventory(sessionIds: readonly string[]): void {
+    if (this.disposed) return;
+    const now = new Set(sessionIds);
+    try {
+      for (const id of this.inventoried) if (!now.has(id)) this.forgetLead(id);
+      for (const id of now) this.notTeammate(id); // está no inventário: é sessão, não teammate
+    } catch {
+      // consumidor com erro: o poll do inventário segue
+    }
+    this.inventoried = now;
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const lead of this.leads.values()) this.cancel(lead);
@@ -127,6 +160,7 @@ export class TeamTracker {
 
   private onLead(sid: string, event: string, p: Record<string, unknown>): void {
     this.seenLeads.add(sid);
+    this.notTeammate(sid);
     switch (event) {
       case "UserPromptSubmit":
         this.lastActiveLead = sid;
@@ -150,20 +184,35 @@ export class TeamTracker {
         if (lead?.active === true && this.hasLiveTeammate(lead)) this.event(lead, "teammate_permission", {});
         return;
       }
-      case "SessionEnd": {
-        const lead = this.leads.get(sid);
-        if (lead === undefined) return;
-        if (lead.active) this.emitUpdate(lead);
-        this.cancel(lead);
-        this.leads.delete(sid);
-        this.seenLeads.delete(sid);
-        for (const [mateId, m] of this.mates) if (m.leadId === sid) this.mates.delete(mateId);
-        if (this.lastActiveLead === sid) this.lastActiveLead = undefined;
+      case "SessionEnd":
+        this.forgetLead(sid);
         return;
-      }
       default:
         return;
     }
+  }
+
+  /** A sessão se mostrou líder/sessão comum: sai dos pendentes e de `mates` (soltando o time em que estava). */
+  private notTeammate(sid: string): void {
+    this.deferred.delete(sid);
+    const asMate = this.mates.get(sid);
+    if (asMate === undefined) return;
+    this.mates.delete(sid);
+    if (asMate.leadId !== undefined) this.release(asMate.leadId, sid);
+  }
+
+  /** Esquece o líder e tudo ligado a ele, descarregando o painel final se havia time. */
+  private forgetLead(sid: string): void {
+    const lead = this.leads.get(sid);
+    if (lead !== undefined) {
+      if (lead.active) this.emitUpdate(lead);
+      this.cancel(lead);
+      this.leads.delete(sid);
+    }
+    this.seenLeads.delete(sid);
+    this.inventoried.delete(sid);
+    for (const [mateId, m] of this.mates) if (m.leadId === sid) this.mates.delete(mateId);
+    if (this.lastActiveLead === sid) this.lastActiveLead = undefined;
   }
 
   // ---------------------------------------------------------------- teammate
@@ -171,14 +220,49 @@ export class TeamTracker {
   private onTeammate(sid: string, event: string, p: Record<string, unknown>): void {
     let mate = this.mates.get(sid);
     if (mate === undefined) {
+      const lead = this.resolve(undefined, p);
+      if (lead === undefined) {
+        this.defer(sid, event, p);
+        return;
+      }
       mate = { leadId: undefined, name: undefined, pendingReply: undefined };
       this.mates.set(sid, mate);
+      this.attach(sid, mate, p, lead);
+      const named = str(p["teammate_name"]);
+      const bound = mate.leadId === undefined ? undefined : this.leads.get(mate.leadId);
+      if (named !== undefined && bound !== undefined) this.bind(bound, mate, named);
+      const held = this.deferred.get(sid);
+      this.deferred.delete(sid);
+      for (const d of held?.payloads ?? []) this.apply(sid, mate, d.event, d.p);
+    } else {
+      this.attach(sid, mate, p);
     }
-    const team = str(p["team_name"]);
-    this.attach(sid, mate, team);
+    this.apply(sid, mate, event, p);
+  }
+
+  /** Guarda o payload de uma sessão de teammate ainda sem prova de time (SessionEnd: só esquece). */
+  private defer(sid: string, event: string, p: Record<string, unknown>): void {
+    if (event === "SessionEnd") {
+      this.deferred.delete(sid);
+      return;
+    }
+    let d = this.deferred.get(sid);
+    if (d === undefined) {
+      d = { since: this.now(), payloads: [] };
+      this.deferred.set(sid, d);
+    }
+    if (d.payloads.length < DEFERRED_MAX) d.payloads.push({ event, p });
+  }
+
+  private expireDeferred(): void {
+    const limit = this.now() - DEFERRED_TTL_MS;
+    for (const [sid, d] of this.deferred) if (d.since < limit) this.deferred.delete(sid);
+  }
+
+  private apply(sid: string, mate: Teammate, event: string, p: Record<string, unknown>): void {
     const lead = mate.leadId === undefined ? undefined : this.leads.get(mate.leadId);
     if (lead === undefined) {
-      if (event === "SessionEnd") this.mates.delete(sid); // teammate sem líder conhecido: só não guarda memória
+      if (event === "SessionEnd") this.mates.delete(sid);
       return;
     }
 
@@ -225,12 +309,28 @@ export class TeamTracker {
     this.schedule(lead);
   }
 
-  /** Liga (ou religa, quando o `team_name` aponta para outro líder) o teammate a um líder e ativa o painel. */
-  private attach(sid: string, mate: Teammate, team: string | undefined): void {
+  /**
+   * Líder do teammate pelo payload: `config.json` do `team_name`, prefixo, o líder atual do teammate (`current`) ou,
+   * com prova de time (`team_name`/`teammate_name`, ou `config.json` do líder com teammates), o último líder ativo.
+   */
+  private resolve(current: string | undefined, p: Record<string, unknown>): { leadId: string; config: TeamConfig | undefined } | undefined {
+    const team = str(p["team_name"]);
     const config = team === undefined ? undefined : this.readConfig(team);
-    let leadId = config?.leadSessionId ?? (team === undefined ? undefined : this.leadByPrefix(team));
-    if (leadId === undefined) leadId = mate.leadId ?? this.lastActiveLead;
-    if (leadId === undefined) return;
+    const leadId = config?.leadSessionId ?? (team === undefined ? undefined : this.leadByPrefix(team)) ?? current;
+    if (leadId !== undefined) return { leadId, config };
+    const last = this.lastActiveLead;
+    if (last === undefined) return undefined;
+    if (team !== undefined || str(p["teammate_name"]) !== undefined) return { leadId: last, config };
+    const found = this.configOfLead(last);
+    return found !== undefined && found.members.length > 0 ? { leadId: last, config: found } : undefined;
+  }
+
+  /** Liga (ou religa, quando o `team_name` aponta para outro líder) o teammate a um líder e ativa o painel. */
+  private attach(sid: string, mate: Teammate, p: Record<string, unknown>, known?: { leadId: string; config: TeamConfig | undefined }): void {
+    const team = str(p["team_name"]);
+    const resolved = known ?? this.resolve(mate.leadId, p);
+    if (resolved === undefined) return;
+    const { leadId, config } = resolved;
 
     const previous = mate.leadId;
     if (previous !== leadId) {
@@ -376,7 +476,7 @@ export class TeamTracker {
   }
 
   private schedule(lead: Lead): void {
-    if (!lead.active || lead.timer !== undefined || this.disposed) return;
+    if (!lead.active || lead.members.size === 0 || lead.timer !== undefined || this.disposed) return;
     lead.timer = this.timers.setTimeout(() => {
       lead.timer = undefined;
       this.emitUpdate(lead);
@@ -390,7 +490,7 @@ export class TeamTracker {
 
   private emitUpdate(lead: Lead): void {
     this.cancel(lead);
-    if (this.disposed) return;
+    if (this.disposed || lead.members.size === 0) return;
     this.emitFn({
       ...newEnvelope(this.machine),
       type: "team.update",

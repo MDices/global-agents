@@ -143,11 +143,11 @@ describe("TeamTracker — fixture tmux (líder interativo, --teammate-mode tmux)
     });
   });
 
-  it("sem config.json: líder pelo prefixo session-<8>; só beta é nomeado", () => {
+  it("sem config.json: vínculo adiado até o team_name (prefixo session-<8>); só beta é nomeado", () => {
     replay(tracker, TMUX);
     expect(sent.every((e) => "leadSessionId" in e && e.leadSessionId === TMUX_LEAD)).toBe(true);
+    // sem config, o permission_prompt chega antes de qualquer prova de time: não vira teammate_permission
     expect(events().map(brief)).toEqual([
-      { kind: "teammate_permission" },
       { kind: "teammate_reply", teammate: "beta", text: "beta: concluída — agent, relay" },
       { kind: "teammate_idle", teammate: "beta" },
       { kind: "teammate_ended", teammate: "beta" },
@@ -215,7 +215,7 @@ describe("TeamTracker — regras", () => {
 
   it("dispose cancela o debounce pendente", () => {
     tracker.observe(lead({ hook_event_name: "UserPromptSubmit", prompt: "time" }), false);
-    tracker.observe(mate({ hook_event_name: "SessionStart" }), true);
+    tracker.observe(mate({ hook_event_name: "TeammateIdle", teammate_name: "alpha", team_name: "session-x" }), true);
     tracker.dispose();
     vi.advanceTimersByTime(5000);
     expect(updates()).toHaveLength(0);
@@ -258,5 +258,92 @@ describe("TeamTracker — memória", () => {
     expect(sent).toEqual([]);
     expect((t as unknown as { mates: Map<string, unknown> }).mates.size).toBe(0);
     t.dispose();
+  });
+});
+
+describe("TeamTracker — vínculo só com evidência de time", () => {
+  type Internals = { mates: Map<string, unknown>; deferred: Map<string, { payloads: unknown[] }>; leads: Map<string, unknown>; seenLeads: Set<string> };
+  const inner = (t: TeamTracker): Internals => t as unknown as Internals;
+  const AGENT = "c0ffee00-1111-2222-3333-444444444444";
+  const lead = (extra: Payload): Payload => ({ session_id: BG_LEAD, cwd: "/x", ...extra });
+  const agentX = (extra: Payload): Payload => ({ session_id: AGENT, cwd: "/x", agent_type: "revisor", ...extra });
+
+  it("agent_type fora do inventário sem team_name, com outro líder ativo: nada emitido e permission_prompt segue do líder", () => {
+    tracker.observe(lead({ hook_event_name: "UserPromptSubmit", prompt: "oi" }), false);
+    tracker.observe(lead({ hook_event_name: "TaskCreated", task_id: "1", task_subject: "tarefa comum" }), false);
+    tracker.observe(agentX({ hook_event_name: "SessionStart", source: "startup" }), true);
+    tracker.observe(agentX({ hook_event_name: "Stop", last_assistant_message: "feito" }), true);
+    tracker.observe(lead({ hook_event_name: "Notification", notification_type: "permission_prompt", message: "x" }), false);
+    vi.advanceTimersByTime(10_000);
+    expect(sent).toEqual([]);
+    expect(inner(tracker).mates.size).toBe(0);
+  });
+
+  it("sessão adiada que vira líder (UserPromptSubmit ou inventário) sai de mates e dos pendentes", () => {
+    tracker.observe(agentX({ hook_event_name: "SessionStart" }), true);
+    expect(inner(tracker).deferred.has(AGENT)).toBe(true);
+    tracker.observe(agentX({ hook_event_name: "UserPromptSubmit", prompt: "oi" }), false); // já no inventário
+    expect(inner(tracker).deferred.has(AGENT)).toBe(false);
+    expect(inner(tracker).mates.has(AGENT)).toBe(false);
+  });
+
+  it("sessão adiada que aparece no inventário sai dos pendentes mesmo sem novo hook", () => {
+    tracker.observe(agentX({ hook_event_name: "SessionStart" }), true);
+    tracker.syncInventory([AGENT]);
+    expect(inner(tracker).deferred.has(AGENT)).toBe(false);
+  });
+
+  it("teammate já vinculado que passa a ser líder é solto do time", () => {
+    tracker.observe(lead({ hook_event_name: "UserPromptSubmit", prompt: "time" }), false);
+    tracker.observe(agentX({ hook_event_name: "TeammateIdle", teammate_name: "x", team_name: "session-x" }), true);
+    expect(inner(tracker).mates.has(AGENT)).toBe(true);
+    tracker.observe({ session_id: AGENT, cwd: "/x", hook_event_name: "TaskCreated", task_id: "9", task_subject: "s" }, false);
+    expect(inner(tracker).mates.has(AGENT)).toBe(false);
+  });
+
+  it("pendentes: no máximo 20 por sessão e expiram em 10 min", () => {
+    tracker.observe(lead({ hook_event_name: "UserPromptSubmit", prompt: "time" }), false);
+    tracker.observe(agentX({ hook_event_name: "Stop", last_assistant_message: "velho" }), true);
+    for (let i = 0; i < 30; i++) tracker.observe(agentX({ hook_event_name: "PreToolUse" }), true);
+    expect(inner(tracker).deferred.get(AGENT)?.payloads).toHaveLength(20);
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    tracker.observe(agentX({ hook_event_name: "TeammateIdle", teammate_name: "x", team_name: "session-x" }), true);
+    expect(events().map((e) => e.kind)).toEqual(["teammate_idle"]); // o "velho" expirou com os pendentes
+  });
+
+  it("painel só com membro: líder ativo sem nenhum membro não emite team.update", () => {
+    tracker.observe(lead({ hook_event_name: "UserPromptSubmit", prompt: "time" }), false);
+    tracker.observe(agentX({ hook_event_name: "TaskCompleted", task_id: "1", task_subject: "s", team_name: "session-x" }), true);
+    vi.advanceTimersByTime(5000);
+    tracker.observe(lead({ hook_event_name: "SessionEnd" }), false);
+    expect(updates()).toEqual([]);
+  });
+});
+
+describe("TeamTracker — liberação de estado", () => {
+  type Internals = { mates: Map<string, unknown>; deferred: Map<string, unknown>; leads: Map<string, unknown>; seenLeads: Set<string> };
+  const inner = (t: TeamTracker): Internals => t as unknown as Internals;
+
+  it("SessionEnd do líder libera leads, seenLeads e mates", () => {
+    replay(tracker, BG.slice(0, -1));
+    expect(inner(tracker).leads.size).toBeGreaterThan(0);
+    replay(tracker, BG.slice(-1));
+    const i = inner(tracker);
+    expect([i.leads.size, i.seenLeads.size, i.mates.size, i.deferred.size]).toEqual([0, 0, 0, 0]);
+  });
+
+  it("líder que some do inventário é esquecido (painel final emitido)", () => {
+    replay(tracker, BG.slice(0, 9));
+    tracker.syncInventory([BG_LEAD]);
+    tracker.syncInventory([]);
+    const i = inner(tracker);
+    expect([i.leads.size, i.seenLeads.size, i.mates.size]).toEqual([0, 0, 0]);
+    expect(updates().at(-1)).toMatchObject({ leadSessionId: BG_LEAD, members: [{ name: "alpha" }] });
+  });
+
+  it("sessão vista mas que ainda não entrou no inventário não é esquecida pelo poll", () => {
+    replay(tracker, BG.slice(0, 4));
+    tracker.syncInventory([]);
+    expect(inner(tracker).leads.has(BG_LEAD)).toBe(true);
   });
 });
