@@ -17,9 +17,6 @@ $PSNativeCommandUseErrorActionPreference = $false  # PS 7.3+: o doctor pode sair
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 if (-not $Token) { $Token = Read-Host -AsSecureString 'Token do relay' }
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Token)
-try { $env:GLOBAL_AGENTS_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 function Get-VersionFrom([string]$text) {
   $m = [regex]::Match($text, '\d+\.\d+\.\d+')
@@ -57,7 +54,15 @@ Write-Host '== 3. configuração, hooks e inicialização no logon (Agendador de
 $installArgs = @($cli, 'install', '--relay', $Relay, '--service', '--apply')
 if ($Fingerprint) { $installArgs += @('--fingerprint', $Fingerprint) }
 foreach ($p in $Project) { $installArgs += @('--project', $p) }
-try { Invoke-Native 'install' { node @installArgs } } finally { Remove-Item Env:GLOBAL_AGENTS_TOKEN -ErrorAction SilentlyContinue }
+# O token só existe no ambiente durante este passo (pnpm install/build não o herdam).
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Token)
+try {
+  $env:GLOBAL_AGENTS_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+  Invoke-Native 'install' { node @installArgs }
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  Remove-Item Env:GLOBAL_AGENTS_TOKEN -ErrorAction SilentlyContinue
+}
 
 Write-Host '== 4. iniciar agora (sem esperar o próximo logon)'
 Invoke-Native 'schtasks /Run' { schtasks /Run /TN global-agents }

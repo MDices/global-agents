@@ -56,6 +56,9 @@ Marque e cole a saída/observações de volta no chat.
 - [ ] **`/claude status`** responde no Discord com as sessões da máquina.
 - [ ] **Cartão de permissão:** uma sessão pede uma ferramenta que exige permissão; o cartão aparece no Discord; Aprovar/Negar chega à sessão.
 - [ ] **Reboot:** reiniciar o PC, fazer logon; sem abrir nada, `status` mostra o agente rodando e o `/claude status` responde.
+- [ ] **Reinício em falha:** matar o `node.exe` do agente pelo Gerenciador de Tarefas e conferir se ele volta em até ~1 min. Se não voltar, anotar o resultado (a decisão sobre um laço de reinício fica para depois do teste).
+- [ ] **Remoção:** depois de `uninstall --service --apply`, conferir que não sobrou nenhum `node.exe` do agente.
+- [ ] **Azure AD:** em PC ingressado no Azure AD, conferir se `USERDOMAIN` = `AzureAD` é aceito no `UserId` da tarefa (`schtasks /Create` não deve falhar).
 - [ ] (Opcional) e2e automatizado: `$env:GLOBAL_AGENTS_E2E=1; pnpm --filter @global-agents/agent test e2e-windows` — cria uma sessão `--bg`, injeta pelo pipe e confere o transcript (responde BRAVO).
 
 ## Alternativa: serviço do Windows com WinSW

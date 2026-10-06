@@ -238,7 +238,7 @@ async function main(argv: string[]): Promise<number> {
       await install(a);
       return 0;
     case "uninstall":
-      if (a.flags.size > 0) throw new UsageError("uninstall só aceita --service");
+      if (a.flags.size > 0) throw new UsageError("uninstall só aceita --service e --apply");
       await uninstall(a);
       return 0;
     case "run":
