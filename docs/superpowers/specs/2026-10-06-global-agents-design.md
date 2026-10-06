@@ -173,6 +173,24 @@ captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
 - Protocolo: comando `session.slash { commandId, sessionId, command, args? }`; resposta `command.ack` com
   `result.screen` ou `command.error`.
 
+### 6.2.2 Times de agentes (pedido do Leonardo, 06/10; spike em pesquisa §8)
+
+- O líder é uma sessão normal (tem thread). Teammates **não** ganham thread nem entram em `session.list`.
+- Agente: eventos de hook com `agent_type` (ou `teammate_name`) são de teammate. O agente mantém
+  `teammateSession → { team, name?, leadSessionId }` aprendendo com `TeammateIdle`/`TaskCompleted` (trazem
+  `teammate_name` + `team_name`) e lendo `~/.claude/teams/<team>/config.json` (`leadSessionId`, `members`) enquanto
+  existe. Eventos de teammate nunca viram `session.status`/`turn.*` da sessão dele.
+- Novos eventos: `team.update { leadSessionId, team, members: [{ name, state: "working"|"idle"|"ended" }],
+  tasks: [{ id, subject, status: "pending"|"completed", owner? }] }` (enviado a cada mudança, com debounce de 2 s) e
+  `team.event { leadSessionId, kind: "task_created"|"task_completed"|"teammate_idle"|"teammate_reply"|
+  "teammate_ended"|"teammate_permission", teammate?, taskId?, subject?, text? }`.
+- Relay, thread do líder: uma mensagem **fixada** "👥 Time" editada a cada `team.update` (no máximo 1 edição a cada
+  5 s), e linhas curtas por `team.event` (`📋 tarefa criada`, `✅ alpha concluiu`, `💤 beta ocioso`,
+  `💬 alpha: <resposta curta>` truncada a 300 chars, `🟡 um teammate aguarda permissão no terminal do líder`).
+- Falar com teammate: mensagem na thread do líder começando com `@<nome>` é injetada no líder como
+  `Repasse ao teammate <nome>: <texto>`.
+- Permissões de teammate: sem aprovação remota no v1 (o hook `PermissionRequest` não dispara para eles).
+
 ### 6.3 Segurança
 
 - Allowlist de Discord user IDs em config; qualquer outro remetente é ignorado em silêncio (gate no **autor**, não no

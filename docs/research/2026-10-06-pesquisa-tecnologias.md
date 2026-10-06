@@ -246,3 +246,28 @@ Design em seções (arquitetura, componentes, fluxo de dados, erros, testes) →
 - /run/media/leonardo/421A73401A733051/DriveD/global-pets (ADR 0003, hook .sh, hookInstaller.ts, packages/protocol).
 - github.com/Victorow/A2A-and-cache-semantic-for-claude (README, CONTEXT.md, design.md, src/agent/host.ts).
 - Relatório de infra do subagente (discord.js, Chat SDK, ws, NATS, Tailscale, SEA, WinSW, Caddy), copiado para o scratchpad da sessão.
+
+## 8. Spike de times de agentes (06/10/2026, Claude Code 2.1.291)
+
+Dois cenários com `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, hooks gravando todo payload: (A) líder `claude --bg`,
+teammates in-process; (B) líder interativo dentro de tmux com `--teammate-mode tmux` (modo do Leonardo).
+
+| Pergunta | Resultado | Confiança |
+|---|---|---|
+| Teammates aparecem em `claude agents --json`? | **Não**, em nenhum dos dois modos | VERIFICADO |
+| Teammates têm registro/inbox (`~/.claude/sessions/<pid>.json`, socket)? | **Não**; só o líder tem | VERIFICADO |
+| Teammates disparam hooks? | **Sim**, com `session_id` próprio: `SessionStart` (com `agent_type`, sem nome), `PreToolUse/PostToolUse`, `Stop` (com `last_assistant_message`), `TeammateIdle` e `TaskCompleted` (ambos com `teammate_name` e `team_name`), `SessionEnd` | VERIFICADO |
+| Como distinguir teammate do líder? | `SessionStart`/`Stop` de teammate trazem `agent_type`; os do líder não | VERIFICADO |
+| Ligação teammate → líder | `team_name` = `session-<8 primeiros do sessionId do líder>` no modo tmux; `~/.claude/teams/<team>/config.json` tem `leadSessionId` e `members[{name, agentType, tmuxPaneId}]` **enquanto o time existe** (é apagado no fim). No modo A o `team_name` não bateu com o id do líder (sessão bg reiniciada); usar o `config.json` | VERIFICADO |
+| `TaskCreated` | Dispara no líder, com `task_id`, `task_subject`, `task_description` (sem dono) | VERIFICADO |
+| Permissão pedida por teammate | Subiu como diálogo no terminal do líder; disparou `Notification` (`permission_prompt`) no líder e **não** disparou `PermissionRequest` | VERIFICADO (modo tmux); NÃO VERIFICADO no modo in-process |
+
+Consequências:
+1. **Bug latente no M1**: sem tratamento, cada teammate geraria uma thread solta no Discord (seus hooks chegam com
+   `session_id` desconhecido). O agente precisa reconhecer eventos de teammate (`agent_type` presente, ou
+   `teammate_name`) e não tratá-los como sessão.
+2. Times no Discord vivem **na thread do líder**: painel fixo editado (membros, estado, tarefas) + linhas curtas por
+   evento. Sem thread por teammate.
+3. Falar com um teammate só via líder (teammates não têm inbox).
+4. Aprovação remota de permissões de teammates **não** é possível pelo hook no v1; a thread do líder avisa que há um
+   teammate aguardando permissão no terminal.

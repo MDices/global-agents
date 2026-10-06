@@ -185,6 +185,30 @@ git add packages/protocol apps/agent apps/relay && git commit -m "feat: comandos
 
 ---
 
+### Task T29 `[O]`: Times de agentes na thread do líder
+
+**Files:**
+- Modify: `packages/protocol/src/events.ts` (+ testes): eventos `team.update` e `team.event` conforme spec §6.2.2.
+- Create: `apps/agent/src/team/tracker.ts`, `apps/agent/test/team-tracker.test.ts`, fixtures `apps/agent/test/fixtures/team-hooks-bg.jsonl` e `team-hooks-tmux.jsonl` (payloads reais do spike de 06/10, copiados de `docs/research` §8 — o coordenador fornece os arquivos no brief).
+- Modify: `apps/agent/src/hooks/mapper.ts` (classificar payload de teammate), `apps/agent/src/main.ts` (ligar o tracker), `apps/agent/src/commands/handle.ts` (`@nome` → texto de repasse).
+- Modify: `apps/relay/src/router.ts`, `apps/relay/src/discord/threads.ts` (mensagem fixada do time + linhas curtas), testes correspondentes.
+
+**Interfaces:**
+- Consumes: `mapHookPayload` (T05), `Inventory` (T04), `ThreadRegistry`/`DiscordPort` (T13) acrescido de `pin(messageId)` e `edit(messageId, text)`, `createCommandBridge` (T18).
+- Produces:
+  - `isTeammatePayload(p): boolean` (tem `agent_type` ou `teammate_name`).
+  - `class TeamTracker` — `observe(payload)`; `teamsDir` injetável; resolve `leadSessionId` pelo `config.json` do time (cache enquanto existir) ou pelo prefixo `session-<8>` do `team_name`; emite `team.update` (debounce 2 s) e `team.event`; ao receber `Stop` de teammate com nome conhecido emite `teammate_reply` com `last_assistant_message` truncado a 300; `Notification` `permission_prompt` no líder com teammate ativo → `teammate_permission`.
+  - Relay: thread do líder ganha mensagem fixada `👥 Time` (membros com estado e lista de tarefas) editada no máximo 1×/5 s; `team.event` vira linha curta; mensagem na thread do líder começando com `@<nome>` vira `session.send` com texto `Repasse ao teammate <nome>: <resto>`.
+
+- [ ] **Step 1: Testes (falham)** — replay dos dois fixtures pelo `TeamTracker` produz: membros `alpha`/`beta`, tarefas com status final `completed`, `teammate_reply` de alpha com o texto real; **nenhum** `session.status`/`turn.*` com `sessionId` de teammate sai do agente; relay: sequência de `team.update` gera 1 `post`+`pin` e depois `edit`s limitados por 5 s (relógio falso); `@alpha foca no backend` na thread do líder → `session.send` com `Repasse ao teammate alpha: foca no backend`.
+- [ ] **Step 2: Implementação e commit**
+
+```bash
+git add packages/protocol apps/agent apps/relay && git commit -m "feat: times de agentes no painel da thread do líder"
+```
+
+---
+
 ## Entrega do M2 (checklist manual)
 
 1. Atualizar relay na VPS (`docker compose up -d --build`) e o agente neste PC.
