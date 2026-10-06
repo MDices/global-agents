@@ -1,7 +1,7 @@
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newEnvelope, type AgentEvent } from "@global-agents/protocol";
+import { newEnvelope, serialize, type AgentEvent } from "@global-agents/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Outbox } from "../src/transport/outbox.js";
 
@@ -112,6 +112,68 @@ describe("Outbox", () => {
     const { got, send } = collector();
     expect(await box.drain(send)).toEqual({ sent: 1, skipped: 0 });
     expect(got.map((e) => e.id)).toEqual([late.id]);
+  });
+
+  it("append depois de um await dentro do send também é preservado", async () => {
+    const box = new Outbox(dir);
+    const a = status(1); const late = reply("depois do await");
+    box.append(a);
+    await box.drain(async () => { await Promise.resolve(); box.append(late); });
+    const { got, send } = collector();
+    expect(await box.drain(send)).toEqual({ sent: 1, skipped: 0 });
+    expect(got.map((e) => e.id)).toEqual([late.id]);
+  });
+
+  it("append que estouraria maxBytes durante o drain não dispara eviction nem se perde", async () => {
+    const a = status(1); const b = status(2); const late = status(3);
+    const bytes = (e: AgentEvent): number => Buffer.byteLength(serialize(e));
+    const box = new Outbox(dir, { maxBytes: bytes(a) + bytes(b) + 10 });
+    box.append(a); box.append(b);
+    const first: AgentEvent[] = [];
+    const res = await box.drain((ev) => {
+      if (ev.id === b.id) return Promise.reject(new Error("caiu"));
+      first.push(ev); box.append(late); return Promise.resolve();
+    });
+    expect(res).toEqual({ sent: 1, skipped: 0 });
+    expect(first.map((e) => e.id)).toEqual([a.id]);
+    const { got, send } = collector();
+    expect(await box.drain(send)).toEqual({ sent: 2, skipped: 0 });
+    expect(got.map((e) => e.id)).toEqual([b.id, late.id]);
+  });
+
+  it("drain chamado de dentro do send recebe a mesma promessa e nada é enviado duas vezes", async () => {
+    const box = new Outbox(dir);
+    const evs = [status(1), status(2)]; const late = reply("tardio");
+    for (const e of evs) box.append(e);
+    const outer: string[] = []; const inner: string[] = [];
+    let nested: Promise<unknown> | undefined;
+    const p = box.drain((ev) => {
+      outer.push(ev.id);
+      if (nested === undefined) {
+        box.append(late);
+        nested = box.drain((e2) => { inner.push(e2.id); return Promise.resolve(); });
+      }
+      return Promise.resolve();
+    });
+    const res = await p;
+    expect(nested).toBe(p);
+    expect(res).toEqual({ sent: 2, skipped: 0 });
+    expect(inner).toEqual([]);
+    expect(outer).toEqual(evs.map((e) => e.id));
+    const { got, send } = collector();
+    await box.drain(send);
+    expect(got.map((e) => e.id)).toEqual([late.id]);
+  });
+
+  it("só protegidos acima do limite: descarta também os protegidos, do mais antigo", async () => {
+    const rs = [reply("r1"), reply("r2"), reply("r3")];
+    const one = Buffer.byteLength(serialize(rs[0] as AgentEvent));
+    // 3 não cabem; 2 cabem mesmo descendo à folga de 90%.
+    const box = new Outbox(dir, { maxBytes: Math.ceil(one * 2.3) });
+    for (const r of rs) box.append(r);
+    const { got, send } = collector();
+    await box.drain(send);
+    expect(got.map((e) => e.id)).toEqual([rs[1]?.id, rs[2]?.id]);
   });
 
   it("drain sem arquivo devolve zeros", async () => {

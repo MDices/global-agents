@@ -77,7 +77,9 @@ export class Outbox {
   /** Drena o arquivo. Se já houver um drain em andamento, devolve a mesma promessa. */
   drain(send: (ev: AgentEvent) => Promise<void>): Promise<DrainResult> {
     if (this.inflight !== undefined) return this.inflight;
-    const p = this.doDrain(send).finally(() => { this.inflight = undefined; });
+    // Marca o drain como ativo antes de qualquer leitura ou send: doDrain só começa no próximo microtask,
+    // então append (sem eviction) e drain reentrante já enxergam `inflight` durante o 1.º send.
+    const p = Promise.resolve().then(() => this.doDrain(send)).finally(() => { this.inflight = undefined; });
     this.inflight = p;
     return p;
   }
@@ -100,10 +102,13 @@ export class Outbox {
       sent++;
     }
 
-    // Preserva o que foi anexado enquanto os envios aconteciam (o arquivo só cresce durante o drain).
+    // Preserva o que foi anexado enquanto os envios aconteciam. Com a eviction suspensa o arquivo só cresce;
+    // se mesmo assim não começar com o snapshot (mexido por fora), mantém toda linha que não estava no snapshot.
     const current = readOrEmpty(this.file);
-    const tail = current.length >= snapshot.length ? current.subarray(snapshot.length).toString("utf8") : "";
-    const remaining = [...queue.slice(sent).map((q) => q.line), ...splitLines(tail)];
+    const tail = current.subarray(0, snapshot.length).equals(snapshot)
+      ? splitLines(current.subarray(snapshot.length).toString("utf8"))
+      : (() => { const seen = new Set(splitLines(snapshot.toString("utf8"))); return splitLines(current.toString("utf8")).filter((l) => !seen.has(l)); })();
+    const remaining = [...queue.slice(sent).map((q) => q.line), ...tail];
     const bytes = remaining.reduce((n, l) => n + Buffer.byteLength(l) + 1, 0);
     this.rewrite(bytes > this.maxBytes ? this.evict(remaining, "") : remaining.map((l) => l + "\n").join(""));
     return { sent, skipped };
