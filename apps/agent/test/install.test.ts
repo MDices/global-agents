@@ -76,6 +76,33 @@ describe("installHooks", () => {
   });
 });
 
+describe("installHooks — robustez", () => {
+  it("lança e não altera o arquivo quando hooks.<ev> não é array", () => {
+    const p = tmpSettings({ hooks: { Stop: "x" } });
+    const before = readFileSync(p);
+    expect(() => installHooks({ settingsPath: p, scriptCommand: CMD })).toThrow(/hooks\.Stop deveria ser um array/);
+    expect(readFileSync(p).equals(before)).toBe(true);
+  });
+
+  it("lança quando hooks não é objeto", () => {
+    const p = tmpSettings({ hooks: [] });
+    expect(() => installHooks({ settingsPath: p, scriptCommand: CMD })).toThrow(/hooks deveria ser um objeto/);
+  });
+
+  it("atualiza o command quando o scriptCommand mudou", () => {
+    const pet = { hooks: [{ type: "command", command: PET }] };
+    const p = tmpSettings({ hooks: { Stop: [pet] } });
+    installHooks({ settingsPath: p, scriptCommand: "bash /a/global-agents-hook.sh" });
+    const r = installHooks({ settingsPath: p, scriptCommand: "bash /b/global-agents-hook.sh" });
+    expect(r.status).toBe("updated");
+    expect(r.changes).toContain("hook Stop atualizado");
+    const s = read(p);
+    expect(s.hooks["Stop"]).toHaveLength(2);
+    expect(s.hooks["Stop"]![0]).toEqual(pet);
+    expect(s.hooks["Stop"]![1]!.hooks[0]!.command).toBe("bash /b/global-agents-hook.sh");
+  });
+});
+
 describe("uninstallHooks", () => {
   it("remove só as entradas global-agents-hook", () => {
     const pet = { hooks: [{ type: "command", command: PET }] };
@@ -93,7 +120,9 @@ describe("uninstallHooks", () => {
 describe("scriptCommandFor", () => {
   it("monta o comando por plataforma", () => {
     expect(scriptCommandFor("win32", "C:\\ac\\hooks")).toMatch(/^powershell -NoProfile/);
-    expect(scriptCommandFor("win32", "C:\\ac\\hooks")).toContain("C:\\ac\\hooks\\global-agents-hook.ps1");
-    expect(scriptCommandFor("linux", "/d")).toBe("bash /d/global-agents-hook.sh");
+    expect(scriptCommandFor("win32", "C:\\ac\\hooks")).toContain('"C:\\ac\\hooks\\global-agents-hook.ps1"');
+    expect(scriptCommandFor("win32", "C:\\Users\\João Silva\\ga")).toMatch(/-File "C:\\Users\\João Silva\\ga\\global-agents-hook\.ps1"$/);
+    expect(scriptCommandFor("linux", "/home/x y/ga")).toBe('bash "/home/x y/ga/global-agents-hook.sh"');
+    expect(scriptCommandFor("linux", "/d")).toBe('bash "/d/global-agents-hook.sh"');
   });
 });

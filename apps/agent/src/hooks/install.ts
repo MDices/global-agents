@@ -24,6 +24,16 @@ function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
+function strictObject(v: unknown, where: string): Record<string, unknown> {
+  if (typeof v === "object" && v !== null && !Array.isArray(v)) return v as Record<string, unknown>;
+  throw new Error(`settings.json inválido: ${where} deveria ser um objeto`);
+}
+
+function strictArray(v: unknown, where: string): unknown[] {
+  if (Array.isArray(v)) return v;
+  throw new Error(`settings.json inválido: ${where} deveria ser um array`);
+}
+
 function timeoutFor(event: string): number {
   return event === "PermissionRequest" ? 1800 : 5;
 }
@@ -61,20 +71,32 @@ export function installHooks(opts: HookOpts & { scriptCommand: string }): {
 } {
   const path = opts.settingsPath ?? defaultSettingsPath();
   const settings = readJsonOrEmpty(path);
-  const hooks = asObject(settings["hooks"]);
+  const hooks = settings["hooks"] === undefined ? {} : strictObject(settings["hooks"], "hooks");
   const changes: string[] = [];
   let hadOurs = false;
 
   for (const ev of EVENTS) {
-    const entries = asArray(hooks[ev]);
+    const entries = hooks[ev] === undefined ? [] : strictArray(hooks[ev], `hooks.${ev}`);
+    const timeout = timeoutFor(ev);
     if (entries.some(isOurs)) {
       hadOurs = true;
+      let stale = false;
+      for (const entry of entries) {
+        for (const h of asArray(asObject(entry)["hooks"])) {
+          const hook = h as Record<string, unknown>;
+          const cmd = asObject(hook)["command"];
+          if (typeof cmd !== "string" || !cmd.includes(MARKER)) continue;
+          if (cmd !== opts.scriptCommand || hook["timeout"] !== timeout) {
+            hook["command"] = opts.scriptCommand;
+            hook["timeout"] = timeout;
+            stale = true;
+          }
+        }
+      }
+      if (stale) changes.push(`hook ${ev} atualizado`);
       continue;
     }
-    hooks[ev] = [
-      ...entries,
-      { hooks: [{ type: "command", command: opts.scriptCommand, timeout: timeoutFor(ev) }] },
-    ];
+    hooks[ev] = [...entries, { hooks: [{ type: "command", command: opts.scriptCommand, timeout }] }];
     changes.push(`adicionado hook ${ev}`);
   }
   if (changes.length > 0) settings["hooks"] = hooks;
@@ -133,7 +155,7 @@ export function uninstallHooks(opts: HookOpts = {}): { removed: string[] } {
 
 export function scriptCommandFor(platform: NodeJS.Platform, scriptsDir: string): string {
   if (platform === "win32") {
-    return `powershell -NoProfile -ExecutionPolicy Bypass -File ${scriptsDir}\\${MARKER}.ps1`;
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptsDir}\\${MARKER}.ps1"`;
   }
-  return `bash ${scriptsDir}/${MARKER}.sh`;
+  return `bash "${scriptsDir}/${MARKER}.sh"`;
 }
