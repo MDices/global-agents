@@ -17,7 +17,7 @@ entre máquinas (o Duo do Victor cobre isso; agent teams dentro de uma sessão j
 | Tema | Decisão | Motivo |
 |---|---|---|
 | Motor | **Tudo é sessão Claude Code**: sessões nascem no terminal ou via `claude --bg --name`; prompts entram pelo socket de inbox; `claude attach` abre no terminal | Zero código de motor; mesma sessão, plugins, memória; verificado Linux + Windows |
-| Rede | Relay na VPS; agentes conectam **para fora** via WebSocket com token por máquina | Nada aberto nos PCs; Discord é sempre saída |
+| Rede | Relay na VPS, porta própria 8443 com TLS autoassinado fixado nos agentes; agentes conectam **para fora** via WebSocket com token por máquina | Nada aberto nos PCs; Discord é sempre saída; independente do outro projeto da VPS |
 | Entrada em sessões com bypass | `crossSessionInbound: "accept"` nas user settings de cada máquina | Explícito e auditável; sem autodeclaração de classe |
 | Aprovação remota | Hook `PermissionRequest` segurado pelo agente até o clique no Discord | Verificado em sessão `--bg` sem ninguém anexado |
 | Discord | Canal por máquina, thread por sessão, `/novo` no canal | Layout pedido pelo Leonardo |
@@ -155,7 +155,7 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 - Allowlist de Discord user IDs em config; qualquer outro remetente é ignorado em silêncio (gate no **autor**, não no
   canal). Botões de permissão também checam o autor do clique.
 - Token por máquina gerado pelo relay (`relay machine add <name>`), guardado como hash.
-- Só a porta 443 exposta, via Caddy (`reverse_proxy` com upgrade de WebSocket, TLS automático).
+- Só a porta 8443 exposta; TLS terminado pelo relay com certificado autoassinado fixado (fingerprint) nos agentes.
 - Intent `MessageContent` ligado no portal; bot com `Public Bot` desligado.
 
 ## 7. Fluxos ponta a ponta
@@ -213,31 +213,30 @@ merge. O planejador (esta sessão) só coordena, revisa e integra.
 2. **M2 Comandar**: `session.send`, `/novo`, `/parar`, fila offline. Entrega: criar e dirigir chats pelo Discord.
 3. **M3 Permissões**: hook `PermissionRequest` + cards com botões.
 4. **M4 Windows**: scripts `.ps1`, named pipe, WinSW, `doctor`; validação no Toneli-PC.
-5. **M5 Deploy**: Docker compose na VPS atrás do Caddy **já existente**, `systemd --user` no Linux, documentação de
-   instalação.
+5. **M5 Deploy**: Docker compose isolado na VPS (porta 8443, TLS próprio), `systemd --user` no Linux, documentação
+   de instalação.
 
-### 11.1 Ambiente real da VPS (levantado em 06/10/2026, leitura via SSH)
+### 11.1 Ambiente real da VPS e isolamento (levantado em 06/10/2026, leitura via SSH)
 
-A VPS (163.176.107.229, Oracle, Ubuntu 24.04, 2 vCPU, 11 GB RAM com 9,4 GB livres, 38 GB de disco livres) é a
-**produção do GestAI**: compose `~/gestai-infra` com ERPNext (frontend, backend, filas, MariaDB, Redis) e um
-container `caddy:2-alpine` que já ocupa 80/443 na rede `gestai-infra_frappe_network`, com `on_demand_tls` para
-`gestai.com.br, *.gestai.com.br` (11 subdomínios de clínicas com certificado). Firewall por iptables só libera 22,
-80 e 443. Sem Node no host; `sudo` sem senha; Docker 29 + Compose v5.
+A VPS (163.176.107.229, Oracle, Ubuntu 24.04, 2 vCPU, 11 GB RAM com 9,4 GB livres, 38 GB de disco livres, Docker 29 +
+Compose v5, `sudo` sem senha, sem Node no host) já hospeda outro projeto que ocupa as portas 80 e 443 com um proxy
+próprio. Decisão do Leonardo: **os dois projetos são independentes**; o agent-connect não referencia, não altera e
+não depende de nada do outro compose.
 
-Consequências para o relay:
+Desenho do isolamento:
 
-- **Não sobe outro proxy nem abre porta nova.** O relay roda num compose próprio (`~/agent-connect`) com rede própria
-  e o serviço `caddy` do gestai-infra ganha essa rede como `external`. No `Caddyfile` entra um bloco dedicado
-  `agent.gestai.com.br { reverse_proxy agent-connect-relay:8080 }` com certificado gerenciado normal (não
-  `on_demand`), que vence o curinga por ser host mais específico. Precisa de registro DNS A para
-  `agent.gestai.com.br` (ou outro nome que o Leonardo escolher) no Registro.br.
-- A única mudança em produção é essa: duas linhas no compose (rede externa) e um bloco no Caddyfile, aplicados com
-  `docker compose up -d caddy` + `caddy reload` (sem derrubar os sites). Fica como tarefa `O` com checklist de
-  rollback e janela combinada com o Leonardo.
-- O relay tem `restart: unless-stopped`, limite de memória (512 MB) e CPU (0.5) no compose para nunca competir com
-  o ERPNext; SQLite em volume próprio; logs com rotação.
-- Backup: o volume do SQLite entra no mesmo esquema de backup que `scripts/` do gestai-infra já usa (verificar no M5).
-
+- Compose próprio em `~/agent-connect/` com rede Docker própria, volume próprio para o SQLite e logs com rotação.
+  Nenhum arquivo fora desse diretório é tocado, exceto a regra de firewall abaixo.
+- O relay escuta em **`0.0.0.0:8443`** e termina TLS ele mesmo (`https`/`wss` nativos do Node). Compartilhado com o
+  outro projeto fica só o host: uma regra `iptables -A INPUT -p tcp --dport 8443 -m state --state NEW -j ACCEPT`
+  persistida, e a mesma liberação na security list da Oracle Cloud.
+- **Certificado**: autoassinado, gerado pelo relay na primeira subida e guardado no volume; o agente local grava o
+  fingerprint SHA-256 na sua config (`relayCertFingerprint`) e rejeita qualquer outro (pinning). Sem domínio, sem
+  DNS, sem Let's Encrypt. Migração futura opcional para um domínio fora do outro projeto com DNS-01 (Cloudflare)
+  muda só `relayUrl` nos agentes.
+- Limites no compose: `mem_limit: 512m`, `cpus: 0.5`, `restart: unless-stopped`.
+- Backup: `relay backup` exporta o SQLite para um `.tar.gz` em `~/agent-connect/backups/` via cron do usuário.
+- Autenticação continua por token de máquina no header do WebSocket; o pinning protege contra MITM no IP.
 
 ## 12. Riscos aceitos
 
