@@ -594,7 +594,7 @@ git add apps/agent && git commit -m "feat(agent): outbox em disco com colapso de
 
 **Interfaces:**
 - Consumes: `Outbox` (T07), `AgentEvent`, `RelayCommand`, `parseLine`, `serialize` (T02).
-- Produces: `class RelayClient extends EventEmitter` — `constructor({ url, token, certFingerprint?, outbox, hello: () => AgentEvent, backoff?: { minMs = 1000, maxMs = 60000 }, pingMs = 30000 })`; `start()`, `stop()`, `send(ev: AgentEvent): void` (se conectado, escreve; senão, `outbox.append`), `isConnected()`. Emite `"command"` com `RelayCommand` validado, `"connected"`, `"disconnected"`, `"warning"` (string). Comportamento: ao conectar envia `hello()` e drena o outbox; `Authorization: Bearer <token>` no handshake; se `certFingerprint` definido, usa `checkServerIdentity` para comparar o `fingerprint256` do certificado e recusa se diferente (`rejectUnauthorized: false` só nesse caso, porque o cert é autoassinado); ping a cada `pingMs`, termina a conexão se não houver pong em `pingMs`; reconecta com backoff exponencial e jitter; linha recebida que não valida → `"warning"`, nunca lança.
+- Produces: `class RelayClient extends EventEmitter` — `constructor({ url, token, certFingerprint?, outbox, hello: () => AgentEvent, backoff?: { minMs = 1000, maxMs = 60000 }, pingMs = 30000 })`; `start()`, `stop()`, `send(ev: AgentEvent): void` (se conectado, escreve; senão, `outbox.append`), `isConnected()`. Emite `"command"` com `RelayCommand` validado, `"connected"`, `"disconnected"`, `"warning"` (string). Comportamento: ao conectar envia `hello()` e drena o outbox; `Authorization: Bearer <token>` no handshake; se `certFingerprint` definido, o pin é feito num `createConnection` próprio que compara o `fingerprint256` do certificado no `secureConnect` e destrói o socket **antes** do upgrade HTTP (o Bearer nunca sai para um servidor não fixado). **Não usar `checkServerIdentity`**: com `rejectUnauthorized: false` e certificado autoassinado o Node não o chama (verificado na T08); ping a cada `pingMs`, termina a conexão se não houver pong em `pingMs`; reconecta com backoff exponencial e jitter; linha recebida que não valida → `"warning"`, nunca lança.
 
 - [ ] **Step 1: Testes (falham)**
 
@@ -608,7 +608,7 @@ Servidor `ws` falso em porta 0 nos testes (sem TLS para os casos funcionais):
 
 - [ ] **Step 2: Implementação**
 
-Pontos de atenção: `new WebSocket(url, { headers, rejectUnauthorized: !certFingerprint, checkServerIdentity: certFingerprint ? (_h, cert) => cert.fingerprint256.toUpperCase() === certFingerprint.toUpperCase() ? undefined : new Error("fingerprint do relay não confere") : undefined })`; `ws.on("pong")` zera o relógio; `terminate()` no timeout; `setTimeout` de reconexão com `Math.min(maxMs, cur * 2) * (0.8 + Math.random() * 0.4)`; `stop()` cancela timers e fecha com código 1000.
+Pontos de atenção: pinning por `createConnection` + verificação de `fingerprint256` em `secureConnect` (ver acima; implementado em `apps/agent/src/transport/client.ts`); `ws.on("pong")` zera o relógio; `terminate()` no timeout; reconexão com `Math.min(maxMs, cur * 2) * (0.8 + Math.random() * 0.4)`; `stop()` cancela timers e fecha com código 1000.
 
 - [ ] **Step 3: Verificar e commitar**
 
