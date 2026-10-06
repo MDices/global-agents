@@ -53,7 +53,7 @@ Todos os comandos abaixo são executados **na VPS** (`ssh ubuntu@<ip-da-vps>`), 
    sudo bash firewall.sh
    sudo iptables -L INPUT --line-numbers -n     # confira: 22, 80, 443 e 8443 antes do REJECT
    ```
-   Se o `netfilter-persistent` não existir, o script avisa como instalar o `iptables-persistent`.
+   O script aplica a regra ao vivo e a grava **só** em `/etc/iptables/rules.v4` (com backup `rules.v4.bak-<data>` e escrita atômica). Ele **não** usa `netfilter-persistent save`, que gravaria as cadeias do Docker do outro projeto e conflitaria com o Docker no boot. Se o `rules.v4` não existir, ele avisa que a regra não sobrevive a um reboot (e não cria o arquivo).
 5. **Security list da Oracle Cloud** (console web, feito por você): VCN → Subnet → Security List → *Add Ingress Rule*: origem `0.0.0.0/0`, TCP, porta de destino `8443`.
 6. **Subir o relay**:
    ```bash
@@ -93,7 +93,7 @@ Repita o `rsync` do passo 1 e, em `~/global-agents/deploy/relay`, rode `docker c
 ```bash
 cd ~/global-agents/deploy/relay
 docker compose down                 # para o relay (o ./data é mantido)
-sudo bash firewall.sh --remove      # apaga só a regra do 8443 e salva
+sudo bash firewall.sh --remove      # apaga só a regra do 8443 (viva e no rules.v4)
 ```
 Depois remova a regra de entrada 8443 da security list da Oracle e, se quiser apagar tudo, `rm -rf ~/global-agents`. O outro projeto da VPS não é afetado em nenhum momento.
 
