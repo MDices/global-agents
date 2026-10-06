@@ -4,7 +4,7 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
 
 ## Pré-requisitos
 
-- Windows 10/11 com PowerShell 5.1 ou 7.
+- Windows 10 (1809 ou mais novo) ou 11, com PowerShell 5.1 ou 7. O agente roda sem janela via `conhost.exe --headless`, que só existe a partir do Windows 10 1809.
 - Node.js ≥ 24 e pnpm (`corepack enable`).
 - Git.
 - Claude Code ≥ 2.1.234, já logado (`claude --version`).
@@ -22,23 +22,24 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
    .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Token "<token>" -Fingerprint "<fp>" -Project C:\dev\meu-projeto
    ```
    Se a política de execução bloquear: `powershell -ExecutionPolicy Bypass -File .\deploy\agent\install-windows.ps1 ...`.
-   Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` (`schtasks /Create ... /SC ONLOGON /RL LIMITED`), inicia o agente e roda o `doctor`.
-3. Para ver o comando do `schtasks` sem executar, rode manualmente `node apps\agent\dist\cli.js install --relay ... --token ... --service` (sem `--apply`).
+   Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` a partir de um XML (`schtasks /Create /TN global-agents /XML ... /F`; gatilho no logon do seu usuário, token interativo, nível limitado, sem limite de tempo, reinício em falha, sem condição de bateria), inicia o agente e roda o `doctor`.
+3. Para ver o XML da tarefa sem registrar nada, rode manualmente `node apps\agent\dist\cli.js install --relay ... --token ... --service` (sem `--apply`).
 
-Se `schtasks /Create` responder "Acesso negado", abra o PowerShell como administrador só para esse passo (o agente continua rodando como o seu usuário, nível limitado).
+Não é preciso administrador: a tarefa é do seu usuário e roda com privilégio limitado. O agente roda **sem janela de console**; não há o que fechar por engano.
 
 ## Verificar
 
 - `node apps\agent\dist\cli.js status` mostra `agente: rodando`.
 - `node apps\agent\dist\cli.js doctor` sem ❌.
 - No Discord, a máquina aparece no canal/relay e `/claude status` responde.
+- A tarefa registrada: `schtasks /Query /TN global-agents /XML` (confira `UserId` = seu usuário, `LeastPrivilege`, `ExecutionTimeLimit` `PT0S`) e `/V /FO LIST` para o status.
 - Log: o agente roda sem console visível; para depurar, rode `node apps\agent\dist\cli.js run` num terminal (pare a tarefa antes: `schtasks /End /TN global-agents`).
 
 ## Parar e remover
 
 ```powershell
 schtasks /End /TN global-agents                     # para agora
-node apps\agent\dist\cli.js uninstall --service --apply   # remove os hooks e a tarefa
+node apps\agent\dist\cli.js uninstall --service --apply   # remove os hooks e a tarefa (faz o /End antes do /Delete)
 ```
 A config em `~/.global-agents` é mantida. `crossSessionInbound` em `~/.claude/settings.json` não é removido automaticamente.
 
@@ -47,7 +48,8 @@ A config em `~/.global-agents` é mantida. `crossSessionInbound` em `~/.claude/s
 Marque e cole a saída/observações de volta no chat.
 
 - [ ] `pnpm build` no Windows termina sem erro e `apps\agent\dist\hooks\scripts\` contém `global-agents-hook.ps1` e `global-agents-hook.sh`.
-- [ ] `install-windows.ps1` conclui; `schtasks /Query /TN global-agents /V /FO LIST` mostra o usuário correto (`Admin`) e o gatilho "Ao fazer logon".
+- [ ] `install-windows.ps1` conclui; `schtasks /Query /TN global-agents /V /FO LIST` mostra o usuário correto (`Admin`) e o gatilho "Ao fazer logon" só para ele; o `/XML` mostra `PT0S`.
+- [ ] Instalou **sem** administrador, e ao iniciar a tarefa não aparece janela de console (o `node.exe` aparece no Gerenciador de Tarefas).
 - [ ] **Injeção via named pipe:** com uma sessão `claude --bg --name teste`, mande uma mensagem pelo Discord e confira no transcript que virou turno (o agente usa a linha de auth com `peerToken` do `.key`).
 - [ ] **`--bg` + `attach`:** criar sessão pelo Discord (`/claude new` ou equivalente), listar com `claude agents`, `claude attach <id>` abre e mostra a conversa.
 - [ ] **`/claude status`** responde no Discord com as sessões da máquina.

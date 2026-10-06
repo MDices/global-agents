@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { cpSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG_PATH, installConfig, loadConfig, saveConfig } from "./config.js";
 import { defaultDeps, runDoctor } from "./doctor.js";
@@ -10,7 +10,7 @@ import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
 import { installUnit, uninstallUnit, unitPath } from "./service/systemd.js";
-import { runWindowsService, serviceBackend } from "./service/windows.js";
+import { runWindowsService, serviceBackend, windowsUserId, type WindowsServiceRun } from "./service/windows.js";
 
 const USAGE = `uso: global-agents <comando> [opções]
 
@@ -75,6 +75,19 @@ function execFileAsync(file: string, args: string[]): Promise<void> {
   });
 }
 
+function winRun(action: "install" | "uninstall", apply: boolean, cli: string, config?: string): WindowsServiceRun {
+  return {
+    action, apply, node: process.execPath, cli, ...(config !== undefined ? { config } : {}),
+    userId: windowsUserId(process.env), workingDir: dirname(cli), log: console.log, exec: execFileAsync,
+    writeTemp: (name, data) => {
+      const dir = mkdtempSync(join(tmpdir(), "global-agents-"));
+      const path = join(dir, name);
+      writeFileSync(path, data);
+      return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+    },
+  };
+}
+
 async function installService(configFile: string, apply: boolean): Promise<void> {
   const backend = serviceBackend(process.platform);
   if (backend === "none") {
@@ -84,7 +97,7 @@ async function installService(configFile: string, apply: boolean): Promise<void>
   const cli = fileURLToPath(import.meta.url);
   if (backend === "schtasks") {
     const custom = configFile === resolve(DEFAULT_CONFIG_PATH) ? undefined : configFile;
-    await runWindowsService({ action: "install", apply, node: process.execPath, cli, ...(custom !== undefined ? { config: custom } : {}), log: console.log, exec: execFileAsync });
+    await runWindowsService(winRun("install", apply, cli, custom));
     return;
   }
   const path = unitPath(process.env, homedir());
@@ -106,7 +119,7 @@ async function uninstallService(apply: boolean): Promise<void> {
     return;
   }
   if (backend === "schtasks") {
-    await runWindowsService({ action: "uninstall", apply, node: process.execPath, cli: fileURLToPath(import.meta.url), log: console.log, exec: execFileAsync });
+    await runWindowsService(winRun("uninstall", apply, fileURLToPath(import.meta.url)));
     return;
   }
   const path = unitPath(process.env, homedir());
