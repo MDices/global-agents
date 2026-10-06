@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { cpSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG_PATH, installConfig, loadConfig, saveConfig } from "./config.js";
@@ -7,13 +8,16 @@ import { defaultDeps, runDoctor } from "./doctor.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
+import { installUnit, uninstallUnit, unitPath } from "./service/systemd.js";
 
 const USAGE = `uso: global-agents <comando> [opções]
 
 comandos:
-  install --relay <url> --token <token> [--fingerprint <fp>] [--project <dir>]...
-            grava a config, copia os scripts de hook e instala os hooks do Claude Code
-  uninstall remove os hooks do Claude Code (a config é mantida)
+  install --relay <url> --token <token> [--fingerprint <fp>] [--project <dir>]... [--service]
+            grava a config, copia os scripts de hook e instala os hooks do Claude Code;
+            --service (Linux) também grava a unidade systemd --user
+  uninstall [--service]
+            remove os hooks do Claude Code (a config é mantida); --service remove a unidade systemd
   run       roda o agente em primeiro plano
   doctor    diagnostica o ambiente (claude, hooks, sockets, relay); sai 1 se algo falhar
   status    mostra a config (sem o token) e se o agente está rodando
@@ -24,21 +28,24 @@ class UsageError extends Error {}
 
 interface Args {
   flags: Map<string, string[]>;
+  service: boolean;
 }
 
 const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--config"]);
 
 function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string[]>();
+  let service = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i] ?? "";
+    if (k === "--service") { service = true; continue; }
     if (!KNOWN.has(k)) throw new UsageError(`opção desconhecida: ${k}`);
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new UsageError(`a opção ${k} precisa de um valor`);
     flags.set(k, [...(flags.get(k) ?? []), v]);
     i++;
   }
-  return { flags };
+  return { flags, service };
 }
 
 function one(a: Args, k: string): string | undefined {
@@ -49,6 +56,35 @@ function one(a: Args, k: string): string | undefined {
 
 function configPath(a: Args): string {
   return resolve(one(a, "--config") ?? DEFAULT_CONFIG_PATH);
+}
+
+function installService(): void {
+  if (process.platform !== "linux") {
+    console.log("nota: --service só existe no Linux (systemd --user); nada foi feito nesta plataforma");
+    return;
+  }
+  const cli = fileURLToPath(import.meta.url);
+  const path = unitPath(process.env, homedir());
+  if (installUnit(path, process.execPath, cli) === "unchanged") console.log(`unidade já instalada em ${path}`);
+  else console.log(`unidade gravada em ${path}`);
+  console.log(`\npara ativar (não executei nada), rode:
+  systemctl --user daemon-reload && systemctl --user enable --now global-agents
+  loginctl enable-linger $USER
+
+o linger mantém o agente rodando e o inicia no boot mesmo sem uma sessão aberta.`);
+}
+
+function uninstallService(): void {
+  if (process.platform !== "linux") {
+    console.log("nota: --service só existe no Linux (systemd --user); nada foi feito nesta plataforma");
+    return;
+  }
+  const path = unitPath(process.env, homedir());
+  const r = uninstallUnit(path);
+  if (r === "absent") console.log(`nenhuma unidade em ${path}`);
+  else if (r === "foreign") console.warn(`aviso: ${path} não é do global-agents; mantida`);
+  else console.log(`unidade removida de ${path}`);
+  if (r !== "foreign") console.log("\npara parar e desativar, rode (antes de remover, se ainda estiver ativa):\n  systemctl --user disable --now global-agents");
 }
 
 function install(a: Args): void {
@@ -79,13 +115,15 @@ function install(a: Args): void {
     console.log(`hooks em ${r.path}:`);
     for (const c of r.changes) console.log(`  - ${c}`);
   }
+  if (a.service) installService();
 }
 
-function uninstall(): void {
+function uninstall(a: Args): void {
   const r = uninstallHooks();
   if (r.removed.length === 0) console.log("nenhum hook do global-agents encontrado");
   else console.log(`hooks removidos: ${r.removed.join(", ")}`);
   console.warn("aviso: crossSessionInbound foi mantido em ~/.claude/settings.json; remova manualmente se quiser");
+  if (a.service) uninstallService();
 }
 
 async function run(a: Args): Promise<void> {
@@ -146,13 +184,14 @@ async function main(argv: string[]): Promise<number> {
     return cmd === undefined ? 1 : 0;
   }
   const a = parseArgs(rest);
+  if (a.service && cmd !== "install" && cmd !== "uninstall") throw new UsageError("--service só vale para install e uninstall");
   switch (cmd) {
     case "install":
       install(a);
       return 0;
     case "uninstall":
-      if (a.flags.size > 0) throw new UsageError("uninstall não aceita opções");
-      uninstall();
+      if (a.flags.size > 0) throw new UsageError("uninstall só aceita --service");
+      uninstall(a);
       return 0;
     case "run":
       await run(a);
