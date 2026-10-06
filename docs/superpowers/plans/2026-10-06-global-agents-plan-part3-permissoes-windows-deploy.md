@@ -1,6 +1,6 @@
-# agent-connect — Plano parte 3: M3 Permissões, M4 Windows, M5 Deploy
+# global-agents — Plano parte 3: M3 Permissões, M4 Windows, M5 Deploy
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-agent-connect-plan.md` e a spec. Pré-requisito: partes 1 e 2 entregues.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-global-agents-plan.md` e a spec. Pré-requisito: partes 1 e 2 entregues.
 
 Etiquetas: `[S]` Sonnet, `[O]` Opus.
 
@@ -81,7 +81,7 @@ git add apps/agent && git commit -m "feat(agent): comando doctor com checks de a
 **Files:**
 - Create: `apps/agent/src/claude/fallback-pty.ts`
 - Modify: `apps/agent/src/commands/handle.ts` (usar fallback quando `inject` lançar `InboxFormatError`), `apps/agent/package.json` (`node-pty` como `optionalDependency`)
-- Test: `apps/agent/test/fallback-pty.test.ts` (só com `AGENT_CONNECT_E2E=1` e `claude` real; unit do parser de saída sempre)
+- Test: `apps/agent/test/fallback-pty.test.ts` (só com `GLOBAL_AGENTS_E2E=1` e `claude` real; unit do parser de saída sempre)
 
 **Interfaces:**
 - Produces: `resumeViaPty({ sessionId, text, claudeBin, timeoutMs = 20000 }): Promise<void>` — abre `node-pty` com env limpo, roda `claude --resume <sessionId> "<text>"`, espera a linha `Sent your prompt to the background session` (sucesso) ou `Your prompt was not sent` / `not running in the background` (erro com a frase), envia `\x1a` (Ctrl+Z) e mata o processo. Emite `agent.warning` via callback `onWarning("usando modo compatível: formato do inbox mudou")`. Se `node-pty` não carregar → erro `fallback indisponível (node-pty não instalado)`.
@@ -99,11 +99,11 @@ git add apps/agent && git commit -m "feat(agent): fallback de injeção por pty 
 ### Task T24 `[S]`: Windows — serviço WinSW, instalador e e2e no Toneli-PC
 
 **Files:**
-- Create: `deploy/agent/agent-connect-winsw.xml`, `deploy/agent/install-windows.ps1`
-- Modify: `apps/agent/src/cli.ts` (`install --service` no Windows grava o XML em `%LOCALAPPDATA%\agent-connect\` e imprime os comandos `winsw install/start`)
-- Test: `apps/agent/test/e2e-windows.test.ts` (só `AGENT_CONNECT_E2E=1` e `process.platform === "win32"`)
+- Create: `deploy/agent/global-agents-winsw.xml`, `deploy/agent/install-windows.ps1`
+- Modify: `apps/agent/src/cli.ts` (`install --service` no Windows grava o XML em `%LOCALAPPDATA%\global-agents\` e imprime os comandos `winsw install/start`)
+- Test: `apps/agent/test/e2e-windows.test.ts` (só `GLOBAL_AGENTS_E2E=1` e `process.platform === "win32"`)
 
-Conteúdo do XML: `<service><id>agent-connect</id><name>agent-connect</name><executable>node</executable><arguments>"%LOCALAPPDATA%\agent-connect\app\apps\agent\dist\main.js" run</arguments><logpath>%LOCALAPPDATA%\agent-connect\logs</logpath><onfailure action="restart" delay="10 sec"/><serviceaccount><username>%USERDOMAIN%\%USERNAME%</username><allowservicelogon>true</allowservicelogon></serviceaccount></service>` — **precisa rodar como o usuário** (sockets/pipes e `~/.claude` são por usuário); documentar que o WinSW pedirá a senha ou usar Agendador de Tarefas "ao logon" como alternativa sem senha.
+Conteúdo do XML: `<service><id>global-agents</id><name>global-agents</name><executable>node</executable><arguments>"%LOCALAPPDATA%\global-agents\app\apps\agent\dist\main.js" run</arguments><logpath>%LOCALAPPDATA%\global-agents\logs</logpath><onfailure action="restart" delay="10 sec"/><serviceaccount><username>%USERDOMAIN%\%USERNAME%</username><allowservicelogon>true</allowservicelogon></serviceaccount></service>` — **precisa rodar como o usuário** (sockets/pipes e `~/.claude` são por usuário); documentar que o WinSW pedirá a senha ou usar Agendador de Tarefas "ao logon" como alternativa sem senha.
 
 e2e Windows reproduz `docs/research/spikes/windows-inbox-spike.ps1` via `injectPrompt` real (auth com `peerToken`) e confere o transcript.
 
@@ -117,11 +117,11 @@ git add deploy/agent apps/agent && git commit -m "feat(agent): serviço Windows 
 ### Task T25 `[S]`: Linux — unidade `systemd --user` e `install --service`
 
 **Files:**
-- Create: `deploy/agent/agent-connect.service`
+- Create: `deploy/agent/global-agents.service`
 - Modify: `apps/agent/src/cli.ts`
 - Test: `apps/agent/test/service-unit.test.ts` (gera o texto da unidade e valida campos)
 
-Unidade: `[Unit] Description=agent-connect (Claude Code ↔ Discord) After=network-online.target` / `[Service] ExecStart=%h/.agent-connect/app/node_modules/.bin/agent-connect run Restart=on-failure RestartSec=5 Environment=NODE_ENV=production` / `[Install] WantedBy=default.target`. `install --service` grava em `~/.config/systemd/user/agent-connect.service` e imprime `systemctl --user daemon-reload && systemctl --user enable --now agent-connect` e `loginctl enable-linger $USER`.
+Unidade: `[Unit] Description=global-agents (Claude Code ↔ Discord) After=network-online.target` / `[Service] ExecStart=%h/.global-agents/app/node_modules/.bin/global-agents run Restart=on-failure RestartSec=5 Environment=NODE_ENV=production` / `[Install] WantedBy=default.target`. `install --service` grava em `~/.config/systemd/user/global-agents.service` e imprime `systemctl --user daemon-reload && systemctl --user enable --now global-agents` e `loginctl enable-linger $USER`.
 
 ```bash
 git add deploy/agent apps/agent && git commit -m "feat(agent): unidade systemd --user e install --service no Linux"
@@ -136,13 +136,13 @@ git add deploy/agent apps/agent && git commit -m "feat(agent): unidade systemd -
 - Modify: `deploy/relay/docker-compose.yml` (revisar limites e volume `./data:/data`), `deploy/relay/.env.example`
 
 Passos do runbook (executados pelo Leonardo ou por um subagente **com confirmação dele antes de cada comando que muda estado na VPS**):
-1. `ssh ubuntu@163.176.107.229 'mkdir -p ~/agent-connect'`; copiar `deploy/relay/*` e o build (`rsync` do repositório, sem `node_modules`).
+1. `ssh ubuntu@163.176.107.229 'mkdir -p ~/global-agents'`; copiar `deploy/relay/*` e o build (`rsync` do repositório, sem `node_modules`).
 2. `firewall.sh`: `sudo iptables -I INPUT 5 -p tcp --dport 8443 -m state --state NEW -j ACCEPT && sudo netfilter-persistent save` (instalar `iptables-persistent` se faltar) — **não** toca em regras existentes. Liberar 8443 na security list da Oracle (console web, manual).
 3. `docker compose up -d --build`; `docker compose logs relay | grep fingerprint`.
 4. `docker compose exec relay node apps/relay/dist/cli.js machine add fedora/leonardo` e `… machine add toneli-pc/admin`.
 5. Verificação: `openssl s_client -connect 163.176.107.229:8443 </dev/null 2>/dev/null | openssl x509 -fingerprint -sha256 -noout` confere com o log; `docker stats --no-stream relay` mostra `< 512 MiB`.
 6. Rollback: `docker compose down`, `sudo iptables -D INPUT -p tcp --dport 8443 -m state --state NEW -j ACCEPT && sudo netfilter-persistent save`.
-7. Backup: cron do usuário `0 3 * * * docker compose -f ~/agent-connect/docker-compose.yml exec -T relay node apps/relay/dist/cli.js backup`.
+7. Backup: cron do usuário `0 3 * * * docker compose -f ~/global-agents/docker-compose.yml exec -T relay node apps/relay/dist/cli.js backup`.
 
 `docs/install.md` cobre: criar o bot no portal do Discord (intent `Message Content`, `Public Bot` desligado, permissões: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Manage Threads, Read Message History, Add Reactions, Use Slash Commands), convite ao servidor, `.env`, instalação do agente em Linux e Windows, `doctor`, e solução de problemas (os erros da spec §8).
 
@@ -154,7 +154,7 @@ git add docs deploy && git commit -m "docs: runbook de deploy isolado na VPS e g
 
 ### Task T27 `[O]`: Revisão final de branch e endurecimento
 
-Rodar `superpowers:requesting-code-review` sobre toda a branch com foco em: Global Constraints do índice (grep por `CLAUDE_CODE_` fora de `exec.ts`; `msgV` só em `inject.ts`; nenhuma referência ao outro projeto da VPS), Review Focus 1–7 com os testes correspondentes presentes, limites do Discord, e `pnpm -r test` com `AGENT_CONNECT_E2E=1` neste PC. Corrigir achados em tarefas pequenas `[S]` ou `[O]` conforme a natureza, cada uma com teste.
+Rodar `superpowers:requesting-code-review` sobre toda a branch com foco em: Global Constraints do índice (grep por `CLAUDE_CODE_` fora de `exec.ts`; `msgV` só em `inject.ts`; nenhuma referência ao outro projeto da VPS), Review Focus 1–7 com os testes correspondentes presentes, limites do Discord, e `pnpm -r test` com `GLOBAL_AGENTS_E2E=1` neste PC. Corrigir achados em tarefas pequenas `[S]` ou `[O]` conforme a natureza, cada uma com teste.
 
 ---
 
@@ -162,4 +162,4 @@ Rodar `superpowers:requesting-code-review` sobre toda a branch com foco em: Glob
 
 1. Permissão: numa sessão em `default`, pedir um `curl`; card aparece na thread; clicar Permitir; o comando roda; card editado.
 2. Windows: Toneli-PC com serviço instalado, canal `#toneli-pc-admin` no Discord, prompt via thread respondido.
-3. `agent-connect doctor` verde nas duas máquinas; `docker stats` do relay dentro do limite; backup noturno gerado.
+3. `global-agents doctor` verde nas duas máquinas; `docker stats` do relay dentro do limite; backup noturno gerado.

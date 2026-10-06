@@ -1,4 +1,4 @@
-# agent-connect Implementation Plan (índice)
+# global-agents Implementation Plan (índice)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,15 +8,15 @@
 
 **Tech Stack:** TypeScript 5, Node 24 LTS, pnpm 10, vitest, zod 3, `ws` 8, `discord.js` 14, `node:sqlite`, `node-pty` (fallback), Docker Compose (relay), systemd --user (Linux) e WinSW (Windows) para o agente.
 
-**Spec:** `docs/superpowers/specs/2026-10-06-agent-connect-design.md` (ler inteira antes de qualquer tarefa; pesquisa e spikes em `docs/research/2026-10-06-pesquisa-tecnologias.md`).
+**Spec:** `docs/superpowers/specs/2026-10-06-global-agents-design.md` (ler inteira antes de qualquer tarefa; pesquisa e spikes em `docs/research/2026-10-06-pesquisa-tecnologias.md`).
 
 ## Partes do plano
 
 | Parte | Marco | Arquivo | Tarefas |
 |---|---|---|---|
-| 1 | M1 Observar (Linux) | `2026-10-06-agent-connect-plan-part1-observar.md` | T01–T14 |
-| 2 | M2 Comandar | `2026-10-06-agent-connect-plan-part2-comandar.md` | T15–T19 |
-| 3 | M3 Permissões, M4 Windows, M5 Deploy | `2026-10-06-agent-connect-plan-part3-permissoes-windows-deploy.md` | T20–T27 |
+| 1 | M1 Observar (Linux) | `2026-10-06-global-agents-plan-part1-observar.md` | T01–T14 |
+| 2 | M2 Comandar | `2026-10-06-global-agents-plan-part2-comandar.md` | T15–T19 |
+| 3 | M3 Permissões, M4 Windows, M5 Deploy | `2026-10-06-global-agents-plan-part3-permissoes-windows-deploy.md` | T20–T27 |
 
 Executar na ordem. Cada parte termina com software que funciona sozinho (M1: ver sessões deste PC no Discord).
 
@@ -44,7 +44,7 @@ este índice (seções Global Constraints e Review Focus) e o comando de teste. 
 - Texto de `session.send` que comece com `/` ou `!` é recusado no relay com `command.error` (`reason: "comandos do Claude não são aceitos"`).
 - Discord: mensagens com no máximo 1900 caracteres de texto; renomear thread no máximo 1×/30 s por thread; gate de autorização sempre pelo **autor** (user ID), nunca pelo canal.
 - `commandId` idempotente: reenvio devolve o mesmo `ack` sem reexecutar.
-- Nada do agent-connect referencia o outro projeto da VPS; a única mudança fora de `~/agent-connect` é a regra de firewall da porta 8443.
+- Nada do global-agents referencia o outro projeto da VPS; a única mudança fora de `~/global-agents` é a regra de firewall da porta 8443.
 - Textos voltados ao usuário (Discord, CLI) em português do Brasil com acentuação correta.
 
 ## Review Focus
@@ -70,7 +70,7 @@ packages/protocol/
   src/index.ts
   test/*.test.ts
 apps/agent/
-  src/config.ts        # ~/.agent-connect/config.json (zod)
+  src/config.ts        # ~/.global-agents/config.json (zod)
   src/machine.ts       # machineId(): hostname/usuario
   src/claude/exec.ts   # runClaude(args): child_process com env limpo
   src/claude/registry.ts   # lê ~/.claude/sessions/<pid>.json e .key
@@ -79,8 +79,8 @@ apps/agent/
   src/claude/inject.ts     # ÚNICO lugar do formato msgV:1 (socket/pipe)
   src/claude/fallback-pty.ts
   src/claude/stop.ts
-  src/hooks/scripts/agent-connect-hook.sh
-  src/hooks/scripts/agent-connect-hook.ps1
+  src/hooks/scripts/global-agents-hook.sh
+  src/hooks/scripts/global-agents-hook.ps1
   src/hooks/install.ts     # merge idempotente em ~/.claude/settings.json
   src/hooks/server.ts      # HTTP 127.0.0.1:48476 /hook, /health
   src/hooks/mapper.ts      # payload de hook → eventos do protocolo
@@ -108,6 +108,6 @@ apps/relay/
   src/main.ts
   test/**
 deploy/relay/Dockerfile  deploy/relay/docker-compose.yml  deploy/relay/.env.example
-deploy/agent/agent-connect.service  deploy/agent/agent-connect-winsw.xml
+deploy/agent/global-agents.service  deploy/agent/global-agents-winsw.xml
 docs/install.md
 ```

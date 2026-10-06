@@ -1,4 +1,4 @@
-# agent-connect — design (2026-10-06)
+# global-agents — design (2026-10-06)
 
 Status: aprovado em conversa seção a seção (arquitetura, componentes/contrato, fluxo de dados); pesquisa e spikes em
 `docs/research/2026-10-06-pesquisa-tecnologias.md`.
@@ -82,7 +82,7 @@ manda texto que comece com `/` ou `!` como `session.send` (vira erro "comandos d
 
 ### 5.1 `hooks/`
 
-- Scripts `agent-connect-hook.sh` (bash + `jq` opcional, sem `jq` manda o payload cru) e `agent-connect-hook.ps1`.
+- Scripts `global-agents-hook.sh` (bash + `jq` opcional, sem `jq` manda o payload cru) e `global-agents-hook.ps1`.
   Fazem **só** um POST em `http://127.0.0.1:48476/hook` com o JSON de stdin e `hook_event_name`. Timeout 2 s,
   `exit 0` sempre. Exceção: `PermissionRequest` mantém a conexão aberta e imprime no stdout a decisão que o agente
   devolver (ou nada, se o agente mandar "deixa no terminal").
@@ -100,7 +100,7 @@ manda texto que comece com `/` ou `!` como `session.send` (vira erro "comandos d
   `sessionId` aparecer no inventário (até 30 s).
 - `inject.ts`: **único arquivo que conhece o formato `msgV: 1`**. Linux/macOS: Unix socket; Windows: named pipe com
   primeira linha `{"type":"auth","token":<peerToken>}`. Conteúdo:
-  `<cross-session-message from="agent-connect" from-name="discord:<usuario>">\n<texto>\n</cross-session-message>`.
+  `<cross-session-message from="global-agents" from-name="discord:<usuario>">\n<texto>\n</cross-session-message>`.
   Verifica `peerProtocol === 1` no registro; se diferente, usa `fallback-pty.ts` (`claude --resume <id> "<texto>"`
   num pty via `node-pty`, aguarda "Sent your prompt", envia Ctrl+Z) e emite aviso.
 - `stop.ts`: `claude stop <bgId>`.
@@ -116,13 +116,13 @@ não traz um), emite `permission.request`, e **segura a resposta HTTP** até: ch
 ### 5.4 `transport/`
 
 `ws` cliente para `wss://<relay>/ws`, header `Authorization: Bearer <token da máquina>`, ping/pong 30 s, backoff
-exponencial 1 s → 60 s. **Outbox** em disco (JSONL em `~/.agent-connect/outbox/`) para eventos enquanto offline,
+exponencial 1 s → 60 s. **Outbox** em disco (JSONL em `~/.global-agents/outbox/`) para eventos enquanto offline,
 drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (só o último vale).
 
 ### 5.5 Configuração
 
-`~/.agent-connect/config.json`: `relayUrl`, `machineName`, `token`, `projects[]`, `port` (padrão 48476). CLI:
-`agent-connect install | uninstall | run | status | doctor`. `doctor` roda os checks dos spikes (versão do Claude,
+`~/.global-agents/config.json`: `relayUrl`, `machineName`, `token`, `projects[]`, `port` (padrão 48476). CLI:
+`global-agents install | uninstall | run | status | doctor`. `doctor` roda os checks dos spikes (versão do Claude,
 `agents --json`, socket/pipe acessível, hooks presentes).
 
 ## 6. Relay + bot (`apps/relay`)
@@ -191,7 +191,7 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 - `packages/protocol`: validação de todos os envelopes (válidos, campos faltando, versão errada).
 - `apps/agent`: unit em `inventory` (fixtures reais do `agents --json` Linux e Windows), `inject` (servidor Unix/pipe
   falso captura a linha), `permissions` (segura/solta/expira), outbox (ordem, colapso, reinício), instalador (merge
-  idempotente com settings que já têm o hook do global-pets). Integração opcional (`AGENT_CONNECT_E2E=1`): sessão
+  idempotente com settings que já têm o hook do global-pets). Integração opcional (`GLOBAL_AGENTS_E2E=1`): sessão
   `--bg` real, injeção e leitura do transcript, nas duas plataformas.
 - `apps/relay`: unit em fatiamento, roteamento thread↔sessão, allowlist, fila de comandos; integração com um agente
   falso em WebSocket; bot testado contra um servidor Discord de teste do Leonardo com `DISCORD_TEST_GUILD`.
@@ -224,12 +224,12 @@ merge. O planejador (esta sessão) só coordena, revisa e integra.
 
 A VPS (163.176.107.229, Oracle, Ubuntu 24.04, 2 vCPU, 11 GB RAM com 9,4 GB livres, 38 GB de disco livres, Docker 29 +
 Compose v5, `sudo` sem senha, sem Node no host) já hospeda outro projeto que ocupa as portas 80 e 443 com um proxy
-próprio. Decisão do Leonardo: **os dois projetos são independentes**; o agent-connect não referencia, não altera e
+próprio. Decisão do Leonardo: **os dois projetos são independentes**; o global-agents não referencia, não altera e
 não depende de nada do outro compose.
 
 Desenho do isolamento:
 
-- Compose próprio em `~/agent-connect/` com rede Docker própria, volume próprio para o SQLite e logs com rotação.
+- Compose próprio em `~/global-agents/` com rede Docker própria, volume próprio para o SQLite e logs com rotação.
   Nenhum arquivo fora desse diretório é tocado, exceto a regra de firewall abaixo.
 - O relay escuta em **`0.0.0.0:8443`** e termina TLS ele mesmo (`https`/`wss` nativos do Node). Compartilhado com o
   outro projeto fica só o host: uma regra `iptables -A INPUT -p tcp --dport 8443 -m state --state NEW -j ACCEPT`
@@ -239,7 +239,7 @@ Desenho do isolamento:
   DNS, sem Let's Encrypt. Migração futura opcional para um domínio fora do outro projeto com DNS-01 (Cloudflare)
   muda só `relayUrl` nos agentes.
 - Limites no compose: `mem_limit: 512m`, `cpus: 0.5`, `restart: unless-stopped`.
-- Backup: `relay backup` exporta o SQLite para um `.tar.gz` em `~/agent-connect/backups/` via cron do usuário.
+- Backup: `relay backup` exporta o SQLite para um `.tar.gz` em `~/global-agents/backups/` via cron do usuário.
 - Autenticação continua por token de máquina no header do WebSocket; o pinning protege contra MITM no IP.
 
 ## 12. Riscos aceitos

@@ -1,4 +1,4 @@
-# agent-connect — pesquisa de tecnologias (2026-10-06)
+# global-agents — pesquisa de tecnologias (2026-10-06)
 
 Objetivo: decidir, antes da spec, como ligar sessões do Claude Code em vários PCs (Linux + Windows) a um canal onde eu
 (um usuário) **observo** o que cada sessão faz e **comando** (mando prompts, crio chats novos, aprovo permissões), com
@@ -125,7 +125,7 @@ pronto, mas fechado.
 
 | Projeto | O que é | Reaproveitar |
 |---|---|---|
-| **global-pets** (Leonardo) | Pet desktop (Electron + Svelte) que ouve hooks do Claude e mostra balão | Contrato de evento `session.status` (`idle/working/waiting/error/done`, `sessionId`, `title`, `snippet`, `transcriptPath`) como **formato de fio** do agent-connect; instalador idempotente de hooks (`hookInstaller.ts`); scripts `.sh`/`.ps1` |
+| **global-pets** (Leonardo) | Pet desktop (Electron + Svelte) que ouve hooks do Claude e mostra balão | Contrato de evento `session.status` (`idle/working/waiting/error/done`, `sessionId`, `title`, `snippet`, `transcriptPath`) como **formato de fio** do global-agents; instalador idempotente de hooks (`hookInstaller.ts`); scripts `.sh`/`.ps1` |
 | **Duo** (Victor, github.com/Victorow/A2A-and-cache-semantic-for-claude) | Ponte agente↔agente entre 2 PCs via MCP/HTTP autenticado sobre Tailscale; Executor hospeda Agent SDK com suspensão/resume; cache semântico | `src/agent/host.ts` (wrapper do SDK: `resume`, `onMessage`, `shouldStop`, bypass); auth bearer em tempo constante; lição do idle-timeout de ~300 s do cliente MCP; lição "barreira real é no servidor Git". Resolve a **fatia 3** (times entre PCs), não observação/comando |
 | **Plugin Discord oficial** | Channel Discord 1:1 | Pairing por código, chunking 2000, `edit_message` para progresso, relay de permissão com botões |
 

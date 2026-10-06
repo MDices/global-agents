@@ -1,4 +1,4 @@
-# agent-connect — spike Windows (rodar no Toneli-PC, PowerShell 7 ou 5.1, Claude Code >= 2.1.234)
+# global-agents — spike Windows (rodar no Toneli-PC, PowerShell 7 ou 5.1, Claude Code >= 2.1.234)
 # Objetivo: confirmar no Windows nativo (1) claude agents --json, (2) claude --bg/attach,
 # (3) injeção de prompt no named pipe de inbox de uma sessão, com a linha de auth obrigatória.
 # Não altera settings. Cria uma sessão de teste e a remove no fim.
@@ -33,8 +33,8 @@ Write-Host "pipeName = $pipeName"
 
 function Send-Inbox([string]$token, [string]$word) {
   $msg = @{
-    msgV = 1; msg_id = [guid]::NewGuid().ToString(); type = "user"; priority = "next"; from = "agent-connect-daemon"
-    message = @{ role = "user"; content = "<cross-session-message from=`"agent-connect-daemon`" from-name=`"discord:leonardo`">`nTeste Windows: responda apenas a palavra $word.`n</cross-session-message>" }
+    msgV = 1; msg_id = [guid]::NewGuid().ToString(); type = "user"; priority = "next"; from = "global-agents-daemon"
+    message = @{ role = "user"; content = "<cross-session-message from=`"global-agents-daemon`" from-name=`"discord:leonardo`">`nTeste Windows: responda apenas a palavra $word.`n</cross-session-message>" }
   } | ConvertTo-Json -Compress -Depth 5
   $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
   try {

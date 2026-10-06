@@ -1,6 +1,6 @@
-# agent-connect — Plano parte 2: M2 Comandar
+# global-agents — Plano parte 2: M2 Comandar
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-agent-connect-plan.md` e a spec. Pré-requisito: parte 1 concluída e M1 entregue.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-global-agents-plan.md` e a spec. Pré-requisito: parte 1 concluída e M1 entregue.
 
 **Goal:** Responder numa thread manda o prompt para a sessão; `/novo` cria uma sessão na máquina; `/parar` encerra uma sessão em background; comandos para máquina offline ficam em fila por 1 h.
 
@@ -19,7 +19,7 @@ Etiquetas: `[S]` Sonnet, `[O]` Opus.
 - Produces: `injectPrompt(target: { messagingSocketPath: string; peerToken?: string; peerProtocol?: number }, text: string, from: { name: string }): Promise<void>`; `buildInboxLine(text, from): string` (exportado só para teste); `escapeForTag(text): string`.
 - **Este é o único arquivo que conhece o formato.** Linha (capturada no spike de 06/10, `peerProtocol: 1`):
   ```json
-  {"msgV":1,"msg_id":"<uuid>","type":"user","message":{"role":"user","content":"<cross-session-message from=\"agent-connect\" from-name=\"<from.name>\">\n<texto>\n</cross-session-message>"},"priority":"next","from":"agent-connect"}
+  {"msgV":1,"msg_id":"<uuid>","type":"user","message":{"role":"user","content":"<cross-session-message from=\"global-agents\" from-name=\"<from.name>\">\n<texto>\n</cross-session-message>"},"priority":"next","from":"global-agents"}
   ```
   Regras: `text` passa por `escapeForTag` (troca `<` por `&lt;` e `>` por `&gt;`, Review Focus 6); `from.name` é saneado para `[A-Za-z0-9:._@-]`; se `peerProtocol` existe e é diferente de 1 → lançar `InboxFormatError` (quem chama usa o fallback pty, T26). Transporte: no Linux/macOS `net.connect(path)`; no Windows (`path` começa com `\\.\pipe\` ou `\\?\pipe\`) `net.connect(path)` também funciona, mas antes da linha envia `{"type":"auth","token":"<peerToken>"}\n` (obrigatório; sem `peerToken` → `InboxAuthError`). Timeout de conexão 5 s; fecha após escrever (o Claude não responde nada).
 

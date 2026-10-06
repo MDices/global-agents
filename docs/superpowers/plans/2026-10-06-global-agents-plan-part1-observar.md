@@ -1,10 +1,10 @@
-# agent-connect — Plano parte 1: M1 Observar (Linux)
+# global-agents — Plano parte 1: M1 Observar (Linux)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-agent-connect-plan.md` (Global Constraints, Review Focus, estrutura de arquivos) e a spec.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Leia antes o índice `2026-10-06-global-agents-plan.md` (Global Constraints, Review Focus, estrutura de arquivos) e a spec.
 
 **Goal:** Ao fim desta parte, as sessões do Claude Code deste PC Linux aparecem num servidor Discord: um canal para a máquina, uma thread por sessão, com prompts digitados no terminal, estados e respostas finais.
 
-**Entrega verificável:** rodar `agent-connect install && agent-connect run` aqui, abrir `claude` em qualquer pasta, digitar um prompt, e ver a thread no Discord com prompt, estado e resposta.
+**Entrega verificável:** rodar `global-agents install && global-agents run` aqui, abrir `claude` em qualquer pasta, digitar um prompt, e ver a thread no Discord com prompt, estado e resposta.
 
 Etiquetas: `[S]` Sonnet, `[O]` Opus (spec §10).
 
@@ -20,14 +20,14 @@ Etiquetas: `[S]` Sonnet, `[O]` Opus (spec §10).
 - Test: `packages/protocol/test/smoke.test.ts`
 
 **Interfaces:**
-- Produces: scripts raiz `pnpm -r typecheck`, `pnpm -r lint`, `pnpm -r test`, `pnpm -r build`; alias de workspace `@agent-connect/protocol`.
+- Produces: scripts raiz `pnpm -r typecheck`, `pnpm -r lint`, `pnpm -r test`, `pnpm -r build`; alias de workspace `@global-agents/protocol`.
 
 - [ ] **Step 1: Arquivos raiz**
 
 `package.json`:
 ```json
 {
-  "name": "agent-connect",
+  "name": "global-agents",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24.0.0", "pnpm": ">=10" },
@@ -90,7 +90,7 @@ export default [
 `packages/protocol/package.json`:
 ```json
 {
-  "name": "@agent-connect/protocol", "version": "0.1.0", "type": "module",
+  "name": "@global-agents/protocol", "version": "0.1.0", "type": "module",
   "main": "./dist/index.js", "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "lint": "eslint src test", "test": "vitest run" },
@@ -100,7 +100,7 @@ export default [
 `packages/protocol/tsconfig.json`: `{ "extends": "../../tsconfig.base.json", "compilerOptions": { "rootDir": "src", "outDir": "dist" }, "include": ["src"] }`.
 `packages/protocol/src/index.ts`: `export const PROTOCOL_VERSION = 1 as const;`
 
-`apps/agent/package.json` (mesmo padrão; nome `@agent-connect/agent`, `"bin": { "agent-connect": "./dist/cli.js" }`, dependências `@agent-connect/protocol: "workspace:*"`, `zod`, `ws ^8.18.0`; devDeps `@types/ws`). `apps/relay/package.json` (nome `@agent-connect/relay`, `"bin": { "relay": "./dist/cli.js" }`, deps `@agent-connect/protocol`, `zod`, `ws`, `discord.js ^14.27.0`). Ambos `tsconfig.json` iguais ao do protocol. `src/main.ts` de cada um: `console.log("agent-connect agent");` / `console.log("agent-connect relay");`.
+`apps/agent/package.json` (mesmo padrão; nome `@global-agents/agent`, `"bin": { "global-agents": "./dist/cli.js" }`, dependências `@global-agents/protocol: "workspace:*"`, `zod`, `ws ^8.18.0`; devDeps `@types/ws`). `apps/relay/package.json` (nome `@global-agents/relay`, `"bin": { "relay": "./dist/cli.js" }`, deps `@global-agents/protocol`, `zod`, `ws`, `discord.js ^14.27.0`). Ambos `tsconfig.json` iguais ao do protocol. `src/main.ts` de cada um: `console.log("global-agents agent");` / `console.log("global-agents relay");`.
 
 - [ ] **Step 3: Teste de fumaça (falha primeiro)**
 
@@ -231,7 +231,7 @@ describe("comandos", () => {
   });
 });
 ```
-Run: `pnpm --filter @agent-connect/protocol test` → FAIL (exports inexistentes).
+Run: `pnpm --filter @global-agents/protocol test` → FAIL (exports inexistentes).
 
 - [ ] **Step 3: Implementação**
 
@@ -316,7 +316,7 @@ export function serialize(message: Message): string { return JSON.stringify(mess
 
 - [ ] **Step 4: Verificar e commitar**
 
-Run: `pnpm --filter @agent-connect/protocol test && pnpm -r typecheck && pnpm -r lint` → PASS.
+Run: `pnpm --filter @global-agents/protocol test && pnpm -r typecheck && pnpm -r lint` → PASS.
 ```bash
 git add packages/protocol && git commit -m "feat(protocol): envelope v1, eventos e comandos com validação zod"
 ```
@@ -331,8 +331,8 @@ git add packages/protocol && git commit -m "feat(protocol): envelope v1, eventos
 
 **Interfaces:**
 - Produces:
-  - `AgentConfig = { relayUrl; relayCertFingerprint?; token; machineName?; projects: string[]; port (48476); claudeBin ("claude"); dataDir (~/.agent-connect) }`
-  - `loadConfig(path = ~/.agent-connect/config.json): AgentConfig`, `saveConfig(cfg, path?)` (modo 0600).
+  - `AgentConfig = { relayUrl; relayCertFingerprint?; token; machineName?; projects: string[]; port (48476); claudeBin ("claude"); dataDir (~/.global-agents) }`
+  - `loadConfig(path = ~/.global-agents/config.json): AgentConfig`, `saveConfig(cfg, path?)` (modo 0600).
   - `machineId(cfg, user = os.userInfo().username): string` → `hostname/usuario` normalizado; `normalizePart(s)` (minúsculas, fora de `[a-z0-9._-]` vira `-`, colapsa `--`).
   - `cleanEnv(env): env` sem `CLAUDE_CODE_*` nem `CLAUDECODE`.
   - `runClaude(args, { cwd?, timeoutMs = 30000, claudeBin = "claude" }): Promise<{ code; stdout; stderr }>` com `stdin: "ignore"`, `windowsHide: true`, env limpo.
@@ -345,11 +345,11 @@ git add packages/protocol && git commit -m "feat(protocol): envelope v1, eventos
 
 `test/exec.test.ts`: `cleanEnv({ PATH:"/bin", CLAUDE_CODE_SESSION_ID:"x", CLAUDECODE:"1", HOME:"/h" })` → `{ PATH:"/bin", HOME:"/h" }`; `runClaude(["-c","echo '{\"ok\":true}'"], { claudeBin: "sh" })` → `code 0` e `JSON.parse(stdout).ok === true`.
 
-Run: `pnpm --filter @agent-connect/agent test` → FAIL (módulos inexistentes).
+Run: `pnpm --filter @global-agents/agent test` → FAIL (módulos inexistentes).
 
 - [ ] **Step 2: Implementação**
 
-`src/config.ts`: schema zod com `relayUrl: z.string().url().refine(u => /^wss?:\/\//.test(u), "relayUrl deve começar com ws:// ou wss://")`, `relayCertFingerprint: z.string().regex(/^[0-9A-F:]{95}$/i).optional()`, `token: z.string().min(1)`, `machineName: z.string().optional()`, `projects: z.array(z.string()).default([])`, `port: z.number().int().default(48476)`, `claudeBin: z.string().default("claude")`, `dataDir: z.string().default(DEFAULT_DIR)`. `loadConfig` lança `config não encontrada em <path>; rode agent-connect install` se o arquivo não existe e `config inválida: <issues>` se o parse falhar. `saveConfig` cria o diretório e grava com `mode: 0o600`.
+`src/config.ts`: schema zod com `relayUrl: z.string().url().refine(u => /^wss?:\/\//.test(u), "relayUrl deve começar com ws:// ou wss://")`, `relayCertFingerprint: z.string().regex(/^[0-9A-F:]{95}$/i).optional()`, `token: z.string().min(1)`, `machineName: z.string().optional()`, `projects: z.array(z.string()).default([])`, `port: z.number().int().default(48476)`, `claudeBin: z.string().default("claude")`, `dataDir: z.string().default(DEFAULT_DIR)`. `loadConfig` lança `config não encontrada em <path>; rode global-agents install` se o arquivo não existe e `config inválida: <issues>` se o parse falhar. `saveConfig` cria o diretório e grava com `mode: 0o600`.
 
 `src/machine.ts`:
 ```ts
@@ -384,7 +384,7 @@ export function runClaude(args: string[], opts: { cwd?: string; timeoutMs?: numb
 
 - [ ] **Step 3: Verificar e commitar**
 
-Run: `pnpm --filter @agent-connect/agent test && pnpm -r typecheck && pnpm -r lint` → PASS.
+Run: `pnpm --filter @global-agents/agent test && pnpm -r typecheck && pnpm -r lint` → PASS.
 ```bash
 git add apps/agent && git commit -m "feat(agent): config, identidade hostname/usuario e execução do claude com env limpo"
 ```
@@ -409,7 +409,7 @@ git add apps/agent && git commit -m "feat(agent): config, identidade hostname/us
 
 `agents-linux.json`: três entradas: uma background `blocked` sem `pid` (`id: "dc63267c"`), uma interativa `busy` (`pid: 2172608`, `name: "correcoes-bugs"`), uma background `waiting`/`blocked`/`waitingFor: "permission prompt"` (`id: "85285a68"`, `sessionId: "85285a68-454d-45d5-aa79-4c7a4cd594d4"`).
 `agents-windows.json`: uma entrada background `idle`/`done`, `cwd: "C:\\Users\\Admin\\CDT\\gestai"`, `id: "ccdcaa73"`.
-`session-2323142.json`: `{"pid":2323142,"sessionId":"6c665779-5c10-4b08-adb5-fc13fd2987d6","cwd":"/home/leonardo/dev/work/agent-connect","version":"2.1.291","peerProtocol":1,"kind":"interactive","messagingSocketPath":"/run/user/1000/cc-socks/2323142.sock","name":"agent-connect-80","status":"busy"}`
+`session-2323142.json`: `{"pid":2323142,"sessionId":"6c665779-5c10-4b08-adb5-fc13fd2987d6","cwd":"/home/leonardo/dev/work/global-agents","version":"2.1.291","peerProtocol":1,"kind":"interactive","messagingSocketPath":"/run/user/1000/cc-socks/2323142.sock","name":"global-agents-80","status":"busy"}`
 `session-2323142.abc.key`: `{"peerToken":"67c71d8bdf91eaa635ce4a50de5fe44c","procStart":"130560421"}`
 
 - [ ] **Step 2: Testes (falham)**
@@ -422,7 +422,7 @@ git add apps/agent && git commit -m "feat(agent): config, identidade hostname/us
 - `parseAgentsJson("")` e `parseAgentsJson("not json")` → `[]`.
 - `Inventory` com `run` falso que devolve `[windows, windows, linux]` em sequência e `pollMs: 10`: `waitFor(s => s.name === "correcoes-bugs", 2000)` resolve; a lista de tamanhos emitidos em `changed` é `[1, 3]` (a repetição não emite).
 
-Run: `pnpm --filter @agent-connect/agent test` → FAIL.
+Run: `pnpm --filter @global-agents/agent test` → FAIL.
 
 - [ ] **Step 3: Implementação**
 
@@ -457,7 +457,7 @@ git add apps/agent && git commit -m "feat(agent): registro de sessões (.json/.k
 ### Task T05 `[O]`: Agente — scripts de hook, servidor HTTP local e mapper de eventos
 
 **Files:**
-- Create: `apps/agent/src/hooks/scripts/agent-connect-hook.sh`, `apps/agent/src/hooks/scripts/agent-connect-hook.ps1`, `apps/agent/src/hooks/server.ts`, `apps/agent/src/hooks/mapper.ts`
+- Create: `apps/agent/src/hooks/scripts/global-agents-hook.sh`, `apps/agent/src/hooks/scripts/global-agents-hook.ps1`, `apps/agent/src/hooks/server.ts`, `apps/agent/src/hooks/mapper.ts`
 - Test: `apps/agent/test/mapper.test.ts`, `apps/agent/test/hook-server.test.ts`, `apps/agent/test/hook-script.test.ts` (pula fora do Linux)
 
 **Interfaces:**
@@ -471,7 +471,7 @@ git add apps/agent && git commit -m "feat(agent): registro de sessões (.json/.k
     - Exige só `session_id`, `cwd`, `hook_event_name` (strings); ignora campos extras; `name` = `lookupName(session_id) ?? basename(cwd)`.
   - `startHookServer(opts: { port: number; machine: string; lookupName; onEvents: (evs: AgentEvent[]) => void; onPermission?: (payload: PermissionPayload, respond: (d: HookDecision | null) => void) => void }): Promise<{ close(): Promise<void> }>` em `127.0.0.1`: `POST /hook` lê JSON, responde `204` imediatamente para todo evento exceto `PermissionRequest`, que fica pendente até `respond(d)` (`200` com `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":d}}`, ou `204` se `null`); `GET /health` → `{ ok: true, version }`; corpo inválido → `400` (o script ignora).
   - `PermissionPayload = { session_id; cwd; tool_name; tool_input: unknown; permission_suggestions?: unknown }`, `HookDecision = { behavior: "allow" | "deny" }`.
-- Scripts: leem o payload de stdin e fazem `POST http://127.0.0.1:${AGENT_CONNECT_PORT:-48476}/hook`; `--max-time 2` (ou 1800 quando `hook_event_name` é `PermissionRequest`); imprimem o corpo da resposta se não vazio; **`exit 0` em qualquer caminho**. O `.sh` usa só `curl` e `grep` (sem `jq`); o `.ps1` usa `Invoke-WebRequest` com `-TimeoutSec`.
+- Scripts: leem o payload de stdin e fazem `POST http://127.0.0.1:${GLOBAL_AGENTS_PORT:-48476}/hook`; `--max-time 2` (ou 1800 quando `hook_event_name` é `PermissionRequest`); imprimem o corpo da resposta se não vazio; **`exit 0` em qualquer caminho**. O `.sh` usa só `curl` e `grep` (sem `jq`); o `.ps1` usa `Invoke-WebRequest` com `-TimeoutSec`.
 
 - [ ] **Step 1: Testes do mapper (falham)**
 
@@ -489,23 +489,23 @@ git add apps/agent && git commit -m "feat(agent): registro de sessões (.json/.k
 
 - [ ] **Step 3: Teste do script (falha)**
 
-`hook-script.test.ts` (`describe.skipIf(process.platform !== "linux")`): sobe o servidor de teste, roda `bash src/hooks/scripts/agent-connect-hook.sh` com `AGENT_CONNECT_PORT` apontando pra ele e o payload no stdin → código de saída `0` e `onEvents` chamado; depois roda com `AGENT_CONNECT_PORT=1` (nada ouvindo) → ainda sai `0` em menos de 3 s.
+`hook-script.test.ts` (`describe.skipIf(process.platform !== "linux")`): sobe o servidor de teste, roda `bash src/hooks/scripts/global-agents-hook.sh` com `GLOBAL_AGENTS_PORT` apontando pra ele e o payload no stdin → código de saída `0` e `onEvents` chamado; depois roda com `GLOBAL_AGENTS_PORT=1` (nada ouvindo) → ainda sai `0` em menos de 3 s.
 
 - [ ] **Step 4: Implementação**
 
-`agent-connect-hook.sh`:
+`global-agents-hook.sh`:
 ```bash
 #!/usr/bin/env bash
-# agent-connect: encaminha o payload do hook ao agente local. Nunca bloqueia o Claude Code.
+# global-agents: encaminha o payload do hook ao agente local. Nunca bloqueia o Claude Code.
 PAYLOAD=$(cat)
-PORT="${AGENT_CONNECT_PORT:-48476}"
+PORT="${GLOBAL_AGENTS_PORT:-48476}"
 MAX=2
 case "$PAYLOAD" in *'"hook_event_name":"PermissionRequest"'*|*'"hook_event_name": "PermissionRequest"'*) MAX=1800;; esac
 RESP=$(printf '%s' "$PAYLOAD" | curl -sS -m "$MAX" -X POST -H 'Content-Type: application/json' --data-binary @- "http://127.0.0.1:${PORT}/hook" 2>/dev/null) || true
 [ -n "$RESP" ] && printf '%s\n' "$RESP"
 exit 0
 ```
-`agent-connect-hook.ps1`: equivalente com `$payload = [Console]::In.ReadToEnd()`, `$max = if ($payload -match '"hook_event_name":\s*"PermissionRequest"') { 1800 } else { 2 }`, `try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/hook" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec $max -UseBasicParsing; if ($r.Content) { Write-Output $r.Content } } catch {}`, `exit 0`.
+`global-agents-hook.ps1`: equivalente com `$payload = [Console]::In.ReadToEnd()`, `$max = if ($payload -match '"hook_event_name":\s*"PermissionRequest"') { 1800 } else { 2 }`, `try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/hook" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec $max -UseBasicParsing; if ($r.Content) { Write-Output $r.Content } } catch {}`, `exit 0`.
 
 `mapper.ts`: valida com zod `{ hook_event_name: z.string(), session_id: z.string(), cwd: z.string() }.passthrough()`; monta eventos com `{ ...newEnvelope(ctx.machine), type, sessionId, name, cwd, ... }`; `basename` de `node:path` (usar `path.win32.basename` quando `cwd` contém `\`).
 
@@ -528,9 +528,9 @@ git add apps/agent && git commit -m "feat(agent): scripts de hook, servidor HTTP
 
 **Interfaces:**
 - Produces:
-  - `installHooks(opts: { settingsPath?: string; scriptCommand: string }): { status: "installed" | "already-present" | "updated"; path: string; changes: string[] }` — mescla em `~/.claude/settings.json`: para cada evento em `["UserPromptSubmit","Notification","Stop","SessionEnd","PermissionRequest"]` adiciona `{ hooks: [{ type: "command", command: scriptCommand, timeout: T }] }` (T = 1800 para `PermissionRequest`, 5 para os demais) se nenhuma entrada já contiver `agent-connect-hook`; grava `crossSessionInbound: "accept"` se ausente. Escrita atômica (tmp + rename), preserva todas as outras chaves e entradas (inclusive hooks do global-pets).
-  - `uninstallHooks(opts): { removed: string[] }` — remove só entradas cujo `command` contém `agent-connect-hook`; **não** mexe em `crossSessionInbound` (avisar o usuário no CLI).
-  - `scriptCommandFor(platform: NodeJS.Platform, scriptsDir: string): string` → Linux/macOS: `bash <dir>/agent-connect-hook.sh`; Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File <dir>\agent-connect-hook.ps1`.
+  - `installHooks(opts: { settingsPath?: string; scriptCommand: string }): { status: "installed" | "already-present" | "updated"; path: string; changes: string[] }` — mescla em `~/.claude/settings.json`: para cada evento em `["UserPromptSubmit","Notification","Stop","SessionEnd","PermissionRequest"]` adiciona `{ hooks: [{ type: "command", command: scriptCommand, timeout: T }] }` (T = 1800 para `PermissionRequest`, 5 para os demais) se nenhuma entrada já contiver `global-agents-hook`; grava `crossSessionInbound: "accept"` se ausente. Escrita atômica (tmp + rename), preserva todas as outras chaves e entradas (inclusive hooks do global-pets).
+  - `uninstallHooks(opts): { removed: string[] }` — remove só entradas cujo `command` contém `global-agents-hook`; **não** mexe em `crossSessionInbound` (avisar o usuário no CLI).
+  - `scriptCommandFor(platform: NodeJS.Platform, scriptsDir: string): string` → Linux/macOS: `bash <dir>/global-agents-hook.sh`; Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File <dir>\global-agents-hook.ps1`.
 - Referência de forma: `apps/desktop/electron/backend/hookInstaller.ts` do global-pets (mesma estratégia de merge, não copiar código do pet).
 
 - [ ] **Step 1: Testes (falham)**
@@ -540,12 +540,12 @@ git add apps/agent && git commit -m "feat(agent): scripts de hook, servidor HTTP
 - settings já com hook do global-pets em `Stop` (`command: "bash /x/global-pets-claude-hook.sh"`) e `permissions: { allow: ["Bash(git *)"] }` → após instalar, `Stop` tem 2 entradas, a do pet intacta na posição 0, `permissions` preservado.
 - rodar duas vezes → segunda chamada `status: "already-present"` e conteúdo do arquivo idêntico byte a byte.
 - settings com `crossSessionInbound: "hold"` → **não** sobrescreve (respeita escolha explícita), `changes` contém aviso `crossSessionInbound mantido em "hold"`.
-- `uninstallHooks` → remove só as entradas com `agent-connect-hook`; a do pet permanece; `crossSessionInbound` permanece.
+- `uninstallHooks` → remove só as entradas com `global-agents-hook`; a do pet permanece; `crossSessionInbound` permanece.
 - `scriptCommandFor("win32", "C:\\ac\\hooks")` começa com `powershell -NoProfile`.
 
 - [ ] **Step 2: Implementação**
 
-Funções internas `readJsonOrEmpty`, `writeJsonAtomic`, `asObject`, `asArray`. Marcador de propriedade: `command.includes("agent-connect-hook")`. Retorno `changes` lista em português o que mudou (`"adicionado hook Stop"`, `"crossSessionInbound definido como accept"`).
+Funções internas `readJsonOrEmpty`, `writeJsonAtomic`, `asObject`, `asArray`. Marcador de propriedade: `command.includes("global-agents-hook")`. Retorno `changes` lista em português o que mudou (`"adicionado hook Stop"`, `"crossSessionInbound definido como accept"`).
 
 - [ ] **Step 3: Verificar e commitar**
 
@@ -604,7 +604,7 @@ Servidor `ws` falso em porta 0 nos testes (sem TLS para os casos funcionais):
 - servidor envia um comando `session.send` válido → evento `"command"` com o objeto; envia `"lixo"` → `"warning"` e a conexão continua.
 - servidor fecha → cliente reconecta em menos de `minMs * 4` (usar `minMs: 20`) e reenvia `hello`.
 - servidor para de responder ping (interceptar e não dar pong é difícil com `ws`; alternativa: `pingMs: 50` e servidor que `pause()` o socket) → cliente emite `"disconnected"` e reconecta.
-- TLS: servidor `https` + `ws` com certificado autoassinado gerado no teste (`node:crypto` `generateKeyPairSync` + `selfsigned`? **Não adicionar dependência**: usar um certificado de fixture `test/fixtures/relay-test.pem` + `.key` commitado, gerado uma vez com `openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=agent-connect-test`); fingerprint certo conecta; fingerprint errado emite `"warning"` contendo `fingerprint` e não conecta.
+- TLS: servidor `https` + `ws` com certificado autoassinado gerado no teste (`node:crypto` `generateKeyPairSync` + `selfsigned`? **Não adicionar dependência**: usar um certificado de fixture `test/fixtures/relay-test.pem` + `.key` commitado, gerado uma vez com `openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=global-agents-test`); fingerprint certo conecta; fingerprint errado emite `"warning"` contendo `fingerprint` e não conecta.
 
 - [ ] **Step 2: Implementação**
 
@@ -622,7 +622,7 @@ git add apps/agent && git commit -m "feat(agent): cliente WebSocket com pinning 
 
 **Files:**
 - Create: `apps/agent/src/main.ts` (substitui o stub), `apps/agent/src/cli.ts`
-- Test: `apps/agent/test/main.test.ts`, `apps/agent/test/e2e-linux.test.ts` (só com `AGENT_CONNECT_E2E=1`)
+- Test: `apps/agent/test/main.test.ts`, `apps/agent/test/e2e-linux.test.ts` (só com `GLOBAL_AGENTS_E2E=1`)
 
 **Interfaces:**
 - Consumes: tudo de T03–T08.
@@ -633,7 +633,7 @@ git add apps/agent && git commit -m "feat(agent): cliente WebSocket com pinning 
 
 `main.test.ts` com `Inventory` e `RelayClient` falsos injetados: ao `start()`, o cliente recebe `hello` seguido de `session.list` quando o inventário emite; um POST de hook `Stop` no servidor local resulta em `turn.reply` e `session.status` enviados ao cliente; um comando recebido gera `command.error` com a razão acima.
 
-`e2e-linux.test.ts` (pulado sem `AGENT_CONNECT_E2E=1`; exige `claude` instalado e diretório confiável): sobe um relay falso `ws` local, `createAgent` com config apontando para ele, roda `claude --bg --name ac-e2e --permission-mode plan "Responda apenas OK."` via `runClaude`, espera receber `session.list` contendo `ac-e2e` e, se os hooks estiverem instalados na máquina, um `turn.reply` com `OK`; no fim `claude stop` e `claude rm`.
+`e2e-linux.test.ts` (pulado sem `GLOBAL_AGENTS_E2E=1`; exige `claude` instalado e diretório confiável): sobe um relay falso `ws` local, `createAgent` com config apontando para ele, roda `claude --bg --name ac-e2e --permission-mode plan "Responda apenas OK."` via `runClaude`, espera receber `session.list` contendo `ac-e2e` e, se os hooks estiverem instalados na máquina, um `turn.reply` com `OK`; no fim `claude stop` e `claude rm`.
 
 - [ ] **Step 2: Implementação e commit**
 
@@ -651,7 +651,7 @@ git add apps/agent && git commit -m "feat(agent): composição do agente, CLI in
 
 **Interfaces:**
 - Produces:
-  - `RelayConfig = { discordToken; guildId; categoryName ("agent-connect"); allowedUserIds: string[]; dataDir ("/data"); port (8443); logLevel }` via `loadRelayConfig(env = process.env)` (variáveis `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_USER_IDS` separado por vírgula, `DATA_DIR`, `PORT`, `LOG_LEVEL`); erro claro quando falta obrigatória.
+  - `RelayConfig = { discordToken; guildId; categoryName ("global-agents"); allowedUserIds: string[]; dataDir ("/data"); port (8443); logLevel }` via `loadRelayConfig(env = process.env)` (variáveis `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `ALLOWED_USER_IDS` separado por vírgula, `DATA_DIR`, `PORT`, `LOG_LEVEL`); erro claro quando falta obrigatória.
   - `openDb(path: string): Db` usando `node:sqlite` (`DatabaseSync`), com `migrate()` idempotente (tabela `schema_version`). Tabelas conforme spec §6.1: `machines(name PK, token_hash, channel_id, last_seen, os, claude_version, claude_account, filter_account)`, `sessions(session_id PK, machine, name, cwd, thread_id, bg_id, state, updated_at)`, `permissions(request_id PK, session_id, message_id, status, decided_by, decided_at)`, `pending_commands(command_id PK, machine, payload, created_at, expires_at, discord_message_id)`.
   - Repositórios tipados: `db.machines.upsert/getByName/getByTokenHash/setChannel/touch/list`, `db.sessions.upsert/get/setThread/setState/listByMachine`, `db.permissions.create/get/resolve`, `db.pendingCommands.add/listDue(machine)/remove/expireBefore(ts)`.
   - `hashToken(token: string): string` (sha256 hex).
@@ -680,7 +680,7 @@ git add apps/relay && git commit -m "feat(relay): config por ambiente e banco SQ
 **Interfaces:**
 - Consumes: `Db`, `hashToken` (T10); `parseLine`, `serialize`, `AgentEvent`, `RelayCommand` (T02).
 - Produces:
-  - `ensureCert(dataDir: string): { key: string; cert: string; fingerprint256: string }` — se não existir `<dataDir>/tls/relay.key|relay.crt`, gera via `openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=agent-connect-relay` (child_process; o container terá `openssl`), senão carrega; calcula fingerprint com `new X509Certificate(cert).fingerprint256`.
+  - `ensureCert(dataDir: string): { key: string; cert: string; fingerprint256: string }` — se não existir `<dataDir>/tls/relay.key|relay.crt`, gera via `openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=global-agents-relay` (child_process; o container terá `openssl`), senão carrega; calcula fingerprint com `new X509Certificate(cert).fingerprint256`.
   - `class AgentHub extends EventEmitter` — `constructor({ db, server: https.Server })`, aceita upgrade em `/ws`, valida `Authorization: Bearer <token>` contra `machines.token_hash` (fecha com 4001 se inválido), associa a conexão ao `machine` (e recusa com 4002 se o `machine` do primeiro envelope não bater com o da máquina do token), mantém no máximo uma conexão por máquina (a nova substitui a antiga), `touch` em `last_seen`. Métodos: `send(machine, cmd: RelayCommand): boolean` (false se offline), `isOnline(machine)`, `onlineMachines()`. Emite `"event"` `(machine, AgentEvent)`, `"online"`/`"offline"` `(machine)`; linha inválida → `"warning"` e ignora.
 
 - [ ] **Step 1: Testes (falham)**
@@ -760,7 +760,7 @@ git add apps/relay && git commit -m "feat(relay): bot Discord com canal por máq
 
 **Interfaces:**
 - Consumes: T10–T13.
-- Produces: `startRelay(cfg, deps?: { port?: DiscordPort })` sobe `ensureCert`, `https` na `cfg.port`, `AgentHub`, bot e router; imprime o fingerprint do certificado no log de subida (o usuário copia para o `agent-connect install --fingerprint`). CLI: `relay machine add <hostname/usuario> [--force]` (gera token aleatório de 32 bytes em hex, grava hash, imprime o token uma única vez), `relay machine rm <name>`, `relay machine list`, `relay fingerprint`, `relay backup` (copia o `.db` com `VACUUM INTO` para `<dataDir>/backups/<data>.db`).
+- Produces: `startRelay(cfg, deps?: { port?: DiscordPort })` sobe `ensureCert`, `https` na `cfg.port`, `AgentHub`, bot e router; imprime o fingerprint do certificado no log de subida (o usuário copia para o `global-agents install --fingerprint`). CLI: `relay machine add <hostname/usuario> [--force]` (gera token aleatório de 32 bytes em hex, grava hash, imprime o token uma única vez), `relay machine rm <name>`, `relay machine list`, `relay fingerprint`, `relay backup` (copia o `.db` com `VACUUM INTO` para `<dataDir>/backups/<data>.db`).
 - Compose: serviço `relay` (build do Dockerfile, `ports: "8443:8443"`, `volumes: ./data:/data`, `env_file: .env`, `restart: unless-stopped`, `mem_limit: 512m`, `cpus: 0.5`, `logging: json-file max-size 10m max-file 3`). Dockerfile `node:24-alpine` + `apk add openssl`, `pnpm install --frozen-lockfile --prod`, `CMD ["node","apps/relay/dist/main.js"]`.
 
 - [ ] **Step 1: Teste de integração (falha)**
@@ -777,6 +777,6 @@ git add apps/relay deploy && git commit -m "feat(relay): composição, CLI de m�
 
 ## Entrega do M1 (checklist manual, Leonardo + coordenador)
 
-1. Na VPS: `mkdir ~/agent-connect && cd ~/agent-connect`, copiar `deploy/relay/*`, preencher `.env` (token do bot, guild, `ALLOWED_USER_IDS`), `sudo iptables -I INPUT -p tcp --dport 8443 -m state --state NEW -j ACCEPT` + persistir (`netfilter-persistent`), liberar 8443 na security list da Oracle, `docker compose up -d`, `docker compose exec relay node apps/relay/dist/cli.js machine add fedora/leonardo` e `… fingerprint`.
-2. Neste PC: `pnpm --filter @agent-connect/agent build && node apps/agent/dist/cli.js install --relay wss://163.176.107.229:8443/ws --token <t> --fingerprint <fp> --project ~/dev/work/agent-connect`, depois `node apps/agent/dist/cli.js run`.
+1. Na VPS: `mkdir ~/global-agents && cd ~/global-agents`, copiar `deploy/relay/*`, preencher `.env` (token do bot, guild, `ALLOWED_USER_IDS`), `sudo iptables -I INPUT -p tcp --dport 8443 -m state --state NEW -j ACCEPT` + persistir (`netfilter-persistent`), liberar 8443 na security list da Oracle, `docker compose up -d`, `docker compose exec relay node apps/relay/dist/cli.js machine add fedora/leonardo` e `… fingerprint`.
+2. Neste PC: `pnpm --filter @global-agents/agent build && node apps/agent/dist/cli.js install --relay wss://163.176.107.229:8443/ws --token <t> --fingerprint <fp> --project ~/dev/work/global-agents`, depois `node apps/agent/dist/cli.js run`.
 3. Abrir `claude` em qualquer pasta, mandar um prompt; conferir no Discord o canal `#fedora-leonardo`, a thread, o prompt, o estado e a resposta fatiada.
