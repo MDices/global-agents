@@ -1,0 +1,181 @@
+import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecResult } from "../src/claude/exec.js";
+import type { AgentConfig } from "../src/config.js";
+import { isTeammatePayload } from "../src/hooks/mapper.js";
+import { startHookServer, type HookServerOptions } from "../src/hooks/server.js";
+import { createAgent, type AgentDeps, type RelayClientLike } from "../src/main.js";
+import type { RelayClientEvents, RelayClientOptions } from "../src/transport/client.js";
+
+const TEAMMATE_STOP = {
+  session_id: "89d41e5b-d50d-4b79-98b7-6ecf1bf4f7b5", cwd: "/home/leonardo/dev/work/global-agents", hook_event_name: "Stop",
+  agent_type: "general-purpose", last_assistant_message: "alpha: docs tem 8 arquivos.", stop_hook_active: false,
+};
+const SESSION: SessionInfo = { sessionId: "s1", cwd: "/home/x/proj", name: "corrige-bugs", kind: "background" };
+
+class FakeInventory extends EventEmitter {
+  list: SessionInfo[] = [];
+  start = vi.fn();
+  stop = vi.fn();
+  find(id: string): SessionInfo | undefined { return this.list.find((s) => s.sessionId === id); }
+  set(list: SessionInfo[]): void { this.list = list; this.emit("changed", list); }
+}
+
+class FakeClient extends EventEmitter<RelayClientEvents> implements RelayClientLike {
+  sent: AgentEvent[] = [];
+  stopped = false;
+  constructor(readonly opts: RelayClientOptions) { super(); }
+  start(): void { this.sent.push(this.opts.hello()); }
+  stop(): void { this.stopped = true; }
+  send(ev: AgentEvent): void { this.sent.push(ev); }
+  types(): string[] { return this.sent.map((e) => e.type); }
+}
+
+let dir: string;
+let agent: { stop(): Promise<void> } | undefined;
+let accounts: string[];
+
+function fakeRun(args: string[]): Promise<ExecResult> {
+  if (args[0] === "--version") return Promise.resolve({ code: 0, stdout: "2.1.291 (Claude Code)\n", stderr: "" });
+  if (args[0] === "auth") {
+    const email = accounts.length > 1 ? accounts.shift() : accounts[0];
+    return Promise.resolve({ code: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", email, orgName: "x" }), stderr: "" });
+  }
+  return Promise.resolve({ code: 1, stdout: "", stderr: "inesperado" });
+}
+
+async function setup(extra: Partial<AgentDeps> = {}) {
+  const cfg: AgentConfig = {
+    relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: ["/home/x/proj"],
+    port: 0, claudeBin: "claude", dataDir: dir,
+  };
+  const inventory = new FakeInventory();
+  let client: FakeClient | undefined;
+  let port = 0;
+  const a = createAgent(cfg, {
+    inventory,
+    client: (opts) => (client = new FakeClient(opts)),
+    hookServer: async (o: HookServerOptions) => { const s = await startHookServer(o); port = s.port; return s; },
+    run: fakeRun,
+    ...extra,
+  });
+  agent = a;
+  await a.start();
+  if (client === undefined) throw new Error("cliente não criado");
+  const c: FakeClient = client;
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/hook`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { a, inventory, client: c, post };
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "agent-main-"));
+  accounts = ["leo@example.com"];
+});
+afterEach(async () => {
+  await agent?.stop();
+  agent = undefined;
+  vi.useRealTimers();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe("createAgent", () => {
+  it("start(): hello com versões, conta e projetos; depois session.list a cada changed", async () => {
+    const { client, inventory } = await setup();
+    expect(client.types()).toEqual(["agent.hello"]);
+    const hello = client.sent[0];
+    expect(AgentEventSchema.safeParse(hello).success).toBe(true);
+    expect(hello).toMatchObject({
+      type: "agent.hello", machine: expect.stringMatching(/^fedora\//), version: "0.1.0", os: process.platform,
+      claudeVersion: "2.1.291", claudeAccount: "leo@example.com", projects: ["/home/x/proj"],
+    });
+    expect(client.opts).toMatchObject({ url: "ws://127.0.0.1:1/ws", token: "segredo" });
+    expect(inventory.start).toHaveBeenCalledTimes(1);
+
+    inventory.set([SESSION]);
+    expect(client.types()).toEqual(["agent.hello", "session.list"]);
+    expect(client.sent[1]).toMatchObject({ type: "session.list", sessions: [SESSION] });
+  });
+
+  it("hello omite claudeVersion/claudeAccount quando o claude falha", async () => {
+    const { client } = await setup({ run: () => Promise.reject(new Error("ENOENT")) });
+    const hello = client.sent[0];
+    expect(AgentEventSchema.safeParse(hello).success).toBe(true);
+    expect(hello).not.toHaveProperty("claudeVersion");
+    expect(hello).not.toHaveProperty("claudeAccount");
+  });
+
+  it("POST de hook Stop → turn.reply e session.status enviados, com o nome do inventário", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([SESSION]);
+    const res = await post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "Stop", last_assistant_message: "pronto" });
+    expect(res.status).toBe(204);
+    await vi.waitFor(() => { expect(client.types()).toEqual(["agent.hello", "session.list", "turn.reply", "session.status"]); });
+    expect(client.sent[2]).toMatchObject({ type: "turn.reply", sessionId: "s1", text: "pronto" });
+    expect(client.sent[3]).toMatchObject({ type: "session.status", sessionId: "s1", name: "corrige-bugs", state: "done" });
+  });
+
+  it("sessão sem nome no inventário cai no nome do diretório", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([{ ...SESSION, name: "" }]);
+    await post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "SessionEnd" });
+    await vi.waitFor(() => { expect(client.types()).toContain("session.status"); });
+    expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "proj" });
+  });
+
+  it("payloads de teammate (agent_type/teammate_name) são descartados", async () => {
+    const { client, post } = await setup();
+    expect((await post(TEAMMATE_STOP)).status).toBe(204);
+    expect((await post({ session_id: "t2", cwd: "/x", hook_event_name: "TaskCompleted", teammate_name: "alpha" })).status).toBe(204);
+    // um hook normal depois prova que os anteriores já foram processados (e descartados)
+    await post({ session_id: "s9", cwd: "/x/y", hook_event_name: "SessionEnd" });
+    await vi.waitFor(() => { expect(client.types()).toEqual(["agent.hello", "session.status"]); });
+    expect(client.sent[1]).toMatchObject({ sessionId: "s9" });
+  });
+
+  it("comando recebido → command.error 'comandos ainda não suportados'", async () => {
+    const { client } = await setup();
+    const cmd: RelayCommand = { ...newEnvelope("relay/relay"), type: "session.stop", commandId: "c42", sessionId: "s1" };
+    client.emit("command", cmd);
+    expect(client.sent.at(-1)).toMatchObject({ type: "command.error", commandId: "c42", reason: "comandos ainda não suportados" });
+    expect(AgentEventSchema.safeParse(client.sent.at(-1)).success).toBe(true);
+  });
+
+  it("reenvia hello só quando claudeAccount muda (checagem a cada 60 s)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    accounts = ["leo@example.com", "leo@example.com", "outra@example.com"];
+    const { client } = await setup();
+    expect(client.types()).toEqual(["agent.hello"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.types()).toEqual(["agent.hello"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.types()).toEqual(["agent.hello", "agent.hello"]);
+    expect(client.sent[1]).toMatchObject({ claudeAccount: "outra@example.com" });
+    // o hello das próximas reconexões também leva a conta nova
+    expect(client.opts.hello()).toMatchObject({ claudeAccount: "outra@example.com" });
+  });
+
+  it("stop() para inventário, servidor de hooks e cliente", async () => {
+    const { a, client, inventory, post } = await setup();
+    await a.stop();
+    agent = undefined;
+    expect(inventory.stop).toHaveBeenCalledTimes(1);
+    expect(client.stopped).toBe(true);
+    await expect(post({ session_id: "s1", cwd: "/x", hook_event_name: "SessionEnd" })).rejects.toThrow();
+    inventory.set([SESSION]);
+    expect(client.types()).toEqual(["agent.hello"]);
+  });
+});
+
+describe("isTeammatePayload", () => {
+  it("reconhece agent_type e teammate_name; sessões comuns não", () => {
+    expect(isTeammatePayload(TEAMMATE_STOP)).toBe(true);
+    expect(isTeammatePayload({ hook_event_name: "TeammateIdle", teammate_name: "alpha" })).toBe(true);
+    expect(isTeammatePayload({ session_id: "s1", cwd: "/x", hook_event_name: "Stop" })).toBe(false);
+    expect(isTeammatePayload(null)).toBe(false);
+    expect(isTeammatePayload("x")).toBe(false);
+  });
+});

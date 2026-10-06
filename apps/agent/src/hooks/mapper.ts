@@ -19,6 +19,16 @@ function cwdName(cwd: string): string {
   return cwd.includes("\\") ? win32.basename(cwd) : basename(cwd);
 }
 
+/**
+ * Payloads de hook vindos de teammates de um time trazem `agent_type` (SessionStart/Stop) ou `teammate_name`
+ * (TeammateIdle/TaskCompleted). Até a T29 eles são descartados antes do mapper.
+ */
+export function isTeammatePayload(payload: unknown): boolean {
+  if (typeof payload !== "object" || payload === null) return false;
+  const p = payload as Record<string, unknown>;
+  return p["agent_type"] !== undefined || p["teammate_name"] !== undefined;
+}
+
 export function mapHookPayload(payload: unknown, ctx: MapperContext): AgentEvent[] {
   const parsed = HookPayloadSchema.safeParse(payload);
   if (!parsed.success) return [];

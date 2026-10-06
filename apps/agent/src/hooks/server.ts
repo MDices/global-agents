@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AgentEvent } from "@global-agents/protocol";
 import { z } from "zod";
-import { mapHookPayload } from "./mapper.js";
+import { isTeammatePayload, mapHookPayload } from "./mapper.js";
 
 export interface PermissionPayload {
   session_id: string;
@@ -109,6 +109,7 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
     }
 
     send(res, 204);
+    if (isTeammatePayload(payload)) return; // teammates de um time: tratamento completo na T29
     const evs = mapHookPayload(payload, { machine: opts.machine, lookupName: opts.lookupName });
     if (evs.length > 0) {
       try {
