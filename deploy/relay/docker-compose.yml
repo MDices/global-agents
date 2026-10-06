@@ -1,0 +1,24 @@
+# Relay do global-agents, isolado: sem redes externas, só a porta 8443 publicada.
+#   cp .env.example .env   # e preencha
+#   docker compose up -d --build
+# Comandos de administração (registrar máquina, backup etc.):
+#   docker compose exec relay node dist/cli.js machine add <hostname/usuario>
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    image: global-agents-relay
+    ports: ["8443:8443"]
+    volumes: ["./data:/data"]
+    env_file: .env
+    environment:
+      TZ: America/Sao_Paulo
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

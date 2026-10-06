@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 /**
@@ -17,6 +18,23 @@ export class MachineExistsError extends Error {
     this.name = "MachineExistsError";
   }
 }
+
+/** O hash do token já pertence a outra máquina (o SQLite recusaria com UNIQUE em `machines.token_hash`). */
+export class TokenInUseError extends Error {
+  constructor(public readonly machine: string) {
+    super(`Este token já pertence a outra máquina; gere outro token para ${machine}`);
+    this.name = "TokenInUseError";
+  }
+}
+
+/** Arquivo do banco do relay dentro do `DATA_DIR`. */
+export function relayDbPath(dataDir: string): string {
+  return join(dataDir, "relay.db");
+}
+
+const SQLITE_CONSTRAINT_UNIQUE = 2067;
+const isTokenHashConflict = (e: unknown): boolean =>
+  (e as { errcode?: unknown }).errcode === SQLITE_CONSTRAINT_UNIQUE && /machines\.token_hash/.test((e as Error).message);
 
 export interface Machine {
   name: string;
@@ -143,8 +161,13 @@ const MIGRATIONS: readonly string[] = [
 export interface Db {
   migrate(): void;
   close(): void;
+  /** Cópia consistente do banco em `dest` (`VACUUM INTO`); o arquivo não pode existir. */
+  backup(dest: string): void;
   machines: {
+    /** Lança `MachineExistsError` (nome com outro token, sem `force`) ou `TokenInUseError` (hash de outra máquina). */
     upsert(m: { name: string; tokenHash: string }, opts?: { force?: boolean }): void;
+    /** Apaga a máquina; `false` se não existia. */
+    remove(name: string): boolean;
     getByName(name: string): Machine | undefined;
     getByTokenHash(tokenHash: string): Machine | undefined;
     setChannel(name: string, channelId: string): void;
@@ -210,16 +233,25 @@ export function openDb(path: string): Db {
   return {
     migrate,
     close: () => db.close(),
+    backup(dest) {
+      db.prepare("VACUUM INTO ?").run(dest);
+    },
     machines: {
       upsert({ name, tokenHash }, opts) {
         const existing = byName(name);
-        if (!existing) {
-          run("INSERT INTO machines (name, token_hash) VALUES (?, ?)", name, tokenHash);
-        } else if (existing.tokenHash !== tokenHash) {
-          if (opts?.force !== true) throw new MachineExistsError(name);
-          run("UPDATE machines SET token_hash = ? WHERE name = ?", tokenHash, name);
+        try {
+          if (!existing) {
+            run("INSERT INTO machines (name, token_hash) VALUES (?, ?)", name, tokenHash);
+          } else if (existing.tokenHash !== tokenHash) {
+            if (opts?.force !== true) throw new MachineExistsError(name);
+            run("UPDATE machines SET token_hash = ? WHERE name = ?", tokenHash, name);
+          }
+        } catch (e) {
+          if (isTokenHashConflict(e)) throw new TokenInUseError(name);
+          throw e;
         }
       },
+      remove: (name) => run("DELETE FROM machines WHERE name = ?", name) > 0,
       getByName: byName,
       getByTokenHash(tokenHash) {
         const r = get("SELECT * FROM machines WHERE token_hash = ?", tokenHash);

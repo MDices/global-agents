@@ -4,3 +4,5 @@ dist/
 .env
 coverage/
 .superpowers/
+deploy/relay/data/
+deploy/relay/.env
