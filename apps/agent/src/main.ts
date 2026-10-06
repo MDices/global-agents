@@ -12,6 +12,7 @@ import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
 import type { AgentConfig } from "./config.js";
 import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
+import { PendingPermissions } from "./permissions/pending.js";
 import { TeamTracker } from "./team/tracker.js";
 import { RelayClient, type RelayClientEvents, type RelayClientOptions } from "./transport/client.js";
 import { Outbox } from "./transport/outbox.js";
@@ -48,7 +49,7 @@ export interface AgentDeps {
   run: SpawnRun;
   /** Intervalo da re-checagem de `claudeAccount` (padrão 60 s). */
   accountCheckMs: number;
-  /** Substitui partes do despacho de comandos (testes; `onPermissionDecide` vem em T20). */
+  /** Substitui partes do despacho de comandos (testes). `onPermissionDecide` já vem ligado às permissões pendentes. */
   commands: Partial<Omit<CommandDeps, "machine" | "inventory">>;
   /** Pasta dos `config.json` de times (padrão `~/.claude/teams`). */
   teamsDir: string;
@@ -103,6 +104,8 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
   const makeClient = deps.client ?? ((opts: RelayClientOptions) => new RelayClient(opts));
   const hookServerFactory = deps.hookServer ?? startHookServer;
   const accountCheckMs = deps.accountCheckMs ?? 60_000;
+  let client: RelayClientLike | undefined;
+  const permissions = new PendingPermissions({ machine, inventory, emit: (ev) => client?.send(ev) });
   const handleCommand = createCommandHandler({
     machine,
     inventory,
@@ -111,6 +114,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),
     slash: (input) => runSlash({ ...input, claudeBin: cfg.claudeBin }),
+    onPermissionDecide: (requestId, behavior) => permissions.decide(requestId, behavior),
     ...deps.commands,
   });
   const version = agentVersion();
@@ -118,7 +122,6 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
 
   let cVersion: string | undefined;
   let account: string | undefined;
-  let client: RelayClientLike | undefined;
   let hookServer: HookServer | undefined;
   let team: TeamTracker | undefined;
   let accountTimer: NodeJS.Timeout | undefined;
@@ -180,6 +183,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
         isKnownSession,
         onEvents: (evs) => { for (const ev of evs) client?.send(ev); },
         onTeamPayload: (payload, teammate) => { tracker.observe(payload, teammate); },
+        onPermission: (payload, respond, signal) => { permissions.open(payload, respond, signal); },
       });
 
       const outbox = new Outbox(cfg.dataDir, {
@@ -210,6 +214,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       inventory.stop();
       inventory.off("changed", onChanged);
       // o listener de "error" fica: um poll em andamento ainda pode emitir, e "error" sem ouvinte lança
+      permissions.close();
       const srv = hookServer;
       hookServer = undefined;
       await srv?.close();

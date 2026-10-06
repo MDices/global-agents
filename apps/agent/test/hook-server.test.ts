@@ -12,7 +12,7 @@ const perm = {
 let close: (() => Promise<void>) | undefined;
 afterEach(async () => { await close?.(); close = undefined; });
 
-async function start(onPermission?: (p: PermissionPayload, respond: (d: HookDecision | null) => void) => void) {
+async function start(onPermission?: (p: PermissionPayload, respond: (d: HookDecision | null) => void, signal: AbortSignal) => void) {
   const onEvents = vi.fn<(evs: AgentEvent[]) => void>();
   const srv = await startHookServer({ port: 0, machine: "fedora/leonardo", lookupName, onEvents, ...(onPermission ? { onPermission } : {}) });
   close = srv.close;
@@ -74,6 +74,40 @@ describe("startHookServer", () => {
   it("PermissionRequest sem onPermission → 204 imediato", async () => {
     const { post } = await start();
     expect((await post(JSON.stringify(perm))).status).toBe(204);
+  });
+
+  it("cliente desconecta antes da resposta → signal abortado; respond depois é ignorado", async () => {
+    let respond: ((d: HookDecision | null) => void) | undefined;
+    let signal: AbortSignal | undefined;
+    const { url } = await start((_p, r, s) => { respond = r; signal = s; });
+    const ac = new AbortController();
+    const req = fetch(`${url}/hook`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(perm), signal: ac.signal });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    expect(signal?.aborted).toBe(false);
+    ac.abort();
+    await expect(req).rejects.toThrow();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(() => respond?.({ behavior: "allow" })).not.toThrow();
+  });
+
+  it("respond antes do fim da conexão não aborta o signal", async () => {
+    let signal: AbortSignal | undefined;
+    const { post } = await start((_p, r, s) => { signal = s; r({ behavior: "deny" }); });
+    expect((await post(JSON.stringify(perm))).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("close() responde 204 às pendências sem abortar o signal", async () => {
+    let signal: AbortSignal | undefined;
+    const { srv, post } = await start((_p, _r, s) => { signal = s; });
+    const pending = post(JSON.stringify(perm));
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await srv.close();
+    close = undefined;
+    expect((await pending).status).toBe(204);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(signal?.aborted).toBe(false);
   });
 
   it("close() responde 204 às pendências", async () => {

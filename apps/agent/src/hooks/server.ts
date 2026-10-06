@@ -28,7 +28,11 @@ export interface HookServerOptions {
    * teammate vai só para cá: nunca vira `session.*`/`turn.*`.
    */
   onTeamPayload?: (payload: Record<string, unknown>, teammate: boolean) => void;
-  onPermission?: (payload: PermissionPayload, respond: (d: HookDecision | null) => void) => void;
+  /**
+   * `PermissionRequest`: a resposta HTTP fica pendente até `respond`. `signal` aborta se o cliente (o script do hook)
+   * desconectar antes de qualquer resposta — aí não há mais a quem responder. `close()` não aborta.
+   */
+  onPermission?: (payload: PermissionPayload, respond: (d: HookDecision | null) => void, signal: AbortSignal) => void;
 }
 
 export interface HookServer {
@@ -100,15 +104,18 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
       const p = perm.data;
       const permission: PermissionPayload = { session_id: p.session_id, cwd: p.cwd, tool_name: p.tool_name, tool_input: p.tool_input };
       if (p.permission_suggestions !== undefined) permission.permission_suggestions = p.permission_suggestions;
+      const disconnected = new AbortController();
       pending.add(res);
-      res.on("close", () => pending.delete(res));
+      res.on("close", () => {
+        if (pending.delete(res)) disconnected.abort();
+      });
       const respond = (d: HookDecision | null): void => {
         if (!pending.delete(res)) return;
         if (d === null) send(res, 204);
         else send(res, 200, { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: d } });
       };
       try {
-        opts.onPermission(permission, respond);
+        opts.onPermission(permission, respond, disconnected.signal);
       } catch {
         respond(null);
       }

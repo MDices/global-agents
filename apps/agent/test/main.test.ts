@@ -225,6 +225,40 @@ describe("createAgent", () => {
     expect(client.opts.hello()).toMatchObject({ claudeAccount: "outra@example.com" });
   });
 
+  it("PermissionRequest vira permission.request; permission.decide do relay responde o hook com a decisão", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([{ ...SESSION, status: "waiting" }]);
+    const hook = post({
+      session_id: "s1", cwd: "/home/x/proj", hook_event_name: "PermissionRequest", permission_mode: "default",
+      tool_name: "Bash", tool_input: { command: "ls", description: "lista" }, tool_use_id: "tu1", permission_suggestions: [],
+    });
+    await vi.waitFor(() => { expect(client.types()).toContain("permission.request"); });
+    const req = client.sent.find((e) => e.type === "permission.request");
+    if (req?.type !== "permission.request") throw new Error("sem permission.request");
+    expect(req).toMatchObject({ sessionId: "s1", tool: "Bash", description: "lista", inputPreview: "ls" });
+    const cmd: RelayCommand = { ...newEnvelope("relay/relay"), type: "permission.decide", commandId: "c9", requestId: req.requestId, behavior: "allow" };
+    client.emit("command", cmd);
+    const res = await hook;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } });
+    await vi.waitFor(() => { expect(client.sent.at(-1)).toMatchObject({ type: "command.ack", commandId: "c9" }); });
+    expect(client.sent.find((e) => e.type === "permission.resolved")).toMatchObject({ requestId: req.requestId, by: "remote", behavior: "allow" });
+    const again: RelayCommand = { ...cmd, commandId: "c10" };
+    client.emit("command", again);
+    await vi.waitFor(() => { expect(client.sent.at(-1)).toMatchObject({ type: "command.error", commandId: "c10" }); });
+  });
+
+  it("stop() responde 204 aos PermissionRequest pendentes sem emitir resolved", async () => {
+    const { a, client, inventory, post } = await setup();
+    inventory.set([{ ...SESSION, status: "waiting" }]);
+    const hook = post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "ls" } });
+    await vi.waitFor(() => { expect(client.types()).toContain("permission.request"); });
+    await a.stop();
+    agent = undefined;
+    expect((await hook).status).toBe(204);
+    expect(client.types()).not.toContain("permission.resolved");
+  });
+
   it("stop() para inventário, servidor de hooks e cliente", async () => {
     const { a, client, inventory, post } = await setup();
     await a.stop();
