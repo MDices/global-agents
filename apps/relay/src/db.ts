@@ -170,7 +170,11 @@ export interface Db {
     remove(name: string): boolean;
     getByName(name: string): Machine | undefined;
     getByTokenHash(tokenHash: string): Machine | undefined;
+    /** Máquina cujo canal do Discord é `channelId`. */
+    getByChannel(channelId: string): Machine | undefined;
     setChannel(name: string, channelId: string): void;
+    /** Liga (`account`) ou desliga (`null`) o filtro de conta do canal da máquina. */
+    setFilterAccount(name: string, account: string | null): void;
     touch(name: string, lastSeen: number, meta?: MachineMeta): void;
     list(): Machine[];
   };
@@ -262,8 +266,15 @@ export function openDb(path: string): Db {
         const r = get("SELECT * FROM machines WHERE token_hash = ?", tokenHash);
         return r && toMachine(r);
       },
+      getByChannel(channelId) {
+        const r = get("SELECT * FROM machines WHERE channel_id = ?", channelId);
+        return r && toMachine(r);
+      },
       setChannel(name, channelId) {
         run("UPDATE machines SET channel_id = ? WHERE name = ?", channelId, name);
+      },
+      setFilterAccount(name, account) {
+        run("UPDATE machines SET filter_account = ? WHERE name = ?", account, name);
       },
       touch(name, lastSeen, meta) {
         run(

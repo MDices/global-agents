@@ -396,3 +396,71 @@ describe("falhas do Discord", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Unknown Message"));
   });
 });
+
+describe("submit: comando com origem por callback (slash commands, menção)", () => {
+  const create = (commandId: string): RelayCommand => ({
+    ...newEnvelope("relay/vps"), type: "session.create", commandId, cwd: "~/dev/work/gestai", name: "teste", prompt: "oi", permissionMode: "default",
+  });
+  const cbs = () => ({ onAck: vi.fn<(r: Record<string, unknown> | undefined) => void>(), onError: vi.fn<(reason: string) => void>() });
+
+  it("online: envia, devolve sent e entrega o result do ack ao callback (uma vez só), sem reações", async () => {
+    hub.online.add(M);
+    const cb = cbs();
+    expect(bridge.submit(M, create("int-1"), cb)).toBe("sent");
+    expect(hub.sent.map((s) => s.cmd.commandId)).toEqual(["int-1"]);
+    await bridge.onAck(M, { ...newEnvelope(M), type: "command.ack", commandId: "int-1", result: { sessionId: "s", bgId: "b" } });
+    await bridge.onAck(M, ack("int-1"));
+    expect(cb.onAck).toHaveBeenCalledTimes(1);
+    expect(cb.onAck).toHaveBeenCalledWith({ sessionId: "s", bgId: "b" });
+    expect(cb.onError).not.toHaveBeenCalled();
+    await settle();
+    expect(port.calls).toEqual([]);
+  });
+
+  it("ack de outra máquina é ignorado; command.error chega como razão", async () => {
+    hub.online.add(M);
+    const cb = cbs();
+    bridge.submit(M, create("int-1"), cb);
+    await bridge.onAck(OTHER, err("int-1", "x", OTHER));
+    expect(cb.onError).not.toHaveBeenCalled();
+    await bridge.onAck(M, err("int-1", "pasta não existe"));
+    expect(cb.onError).toHaveBeenCalledWith("pasta não existe");
+  });
+
+  it("offline: grava na fila e devolve queued; ao conectar, envia e o ack chega ao callback", async () => {
+    const cb = cbs();
+    expect(bridge.submit(M, create("int-2"), cb)).toBe("queued");
+    expect(db.pendingCommands.listDue(M).map((r) => r.commandId)).toEqual(["int-2"]);
+    expect(hub.sent).toEqual([]);
+    hub.online.add(M);
+    await bridge.onMachineOnline(M);
+    expect(hub.sent.map((s) => s.cmd.type)).toEqual(["session.create"]);
+    await bridge.onAck(M, ack("int-2"));
+    expect(cb.onAck).toHaveBeenCalledWith(undefined);
+    await settle();
+    expect(port.calls).toEqual([]);
+  });
+
+  it("expirado na fila: o callback recebe o aviso de expiração", async () => {
+    const cb = cbs();
+    bridge.submit(M, create("int-3"), cb);
+    vi.advanceTimersByTime(COMMAND_TTL_MS + 1);
+    await bridge.expire();
+    expect(cb.onError).toHaveBeenCalledWith(EXPIRED_TEXT);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("falha ao gravar na fila (commandId repetido) devolve failed e loga", () => {
+    const cb = cbs();
+    expect(bridge.submit(M, create("int-4"), cb)).toBe("queued");
+    expect(bridge.submit(M, create("int-4"), cb)).toBe("failed");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("int-4"));
+  });
+
+  it("callback que lança não derruba quem chamou", async () => {
+    hub.online.add(M);
+    bridge.submit(M, create("int-5"), { onAck: () => { throw new Error("boom"); }, onError: () => {} });
+    await expect(bridge.onAck(M, ack("int-5"))).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("boom"));
+  });
+});

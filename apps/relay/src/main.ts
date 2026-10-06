@@ -2,12 +2,13 @@ import { accessSync, constants, mkdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { Events, type Client, type Message } from "discord.js";
+import { Events, type Client, type Interaction, type Message } from "discord.js";
 import type { AgentEvent } from "@global-agents/protocol";
 import { createCommandBridge } from "./commands.js";
 import { loadRelayConfig, type LogLevel, type RelayConfig } from "./config.js";
 import { openDb, relayDbPath } from "./db.js";
-import { createBot, DiscordJsPort, type DiscordPort } from "./discord/bot.js";
+import { createBot, DiscordJsPort, registerSlashCommands, toSlashInteraction, type DiscordPort } from "./discord/bot.js";
+import { createSlashHandler, stripMention } from "./discord/slash.js";
 import { ThreadRegistry } from "./discord/threads.js";
 import { createRouter, machineChannelResolver } from "./router.js";
 import { ensureCert } from "./tls.js";
@@ -111,11 +112,12 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     const threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log: routerLog });
     const router = createRouter({ db, port, threads, hub, log: routerLog });
     const bridge = createCommandBridge({ db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
+    const slash = createSlashHandler({ db, threads, bridge, router, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
     // Com hub e servidor já fechados, espera (com teto) o que já estava na fila ir para o Discord, antes de
     // derrubar o bot e fechar o banco: fica logo acima do bot (ou do `db.close`, quando a porta é injetada).
     cleanup.splice(deps.port === undefined ? 2 : 1, 0, async () => {
       let timer: NodeJS.Timeout | undefined;
-      await Promise.race([Promise.all([router.idle(), bridge.idle()]), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
+      await Promise.race([Promise.all([router.idle(), bridge.idle(), slash.idle()]), new Promise<void>((r) => { timer = setTimeout(r, DRAIN_MS); })]);
       clearTimeout(timer);
     });
     cleanup.push(() => { threads.dispose(); });
@@ -130,14 +132,37 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     hub.on("online", onMachineOnline);
     bridge.start();
     cleanup.push(() => {
+      slash.dispose();
       bridge.dispose();
       hub.off("event", onAgentEvent);
       hub.off("online", onMachineOnline);
     });
     if (client !== undefined) {
       const discord = client;
+      registerSlashCommands(discord, cfg.guildId).then(
+        () => { log("info", "discord: comandos /novo, /sessoes, /parar e /filtro registrados no servidor"); },
+        (e: unknown) => { log("error", `discord: falha ao registrar os slash commands: ${(e as Error).message}`); },
+      );
+      const onInteraction = (interaction: Interaction): void => {
+        const i = toSlashInteraction(interaction);
+        if (i !== undefined) void slash.onInteraction(i);
+      };
+      discord.on(Events.InteractionCreate, onInteraction);
+      cleanup.push(() => { discord.off(Events.InteractionCreate, onInteraction); });
       const onMessage = (message: Message): void => {
-        if (!message.channel.isThread()) return;
+        if (!message.channel.isThread()) {
+          // Menção explícita ao bot (`<@id>` no texto; responder a uma mensagem do bot não conta) vira `/novo`.
+          const botId = discord.user?.id;
+          if (botId === undefined || !message.inGuild() || !new RegExp(`<@!?${botId}>`).test(message.content)) return;
+          void slash.onMention({
+            messageId: message.id,
+            channelId: message.channelId,
+            authorId: message.author.id,
+            isBot: message.author.bot || message.system,
+            text: stripMention(message.content, botId),
+          });
+          return;
+        }
         void bridge.onThreadMessage({
           authorId: message.author.id,
           threadId: message.channelId,

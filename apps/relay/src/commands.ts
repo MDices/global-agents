@@ -35,7 +35,22 @@ export interface CommandBridgeDeps {
   log?: (msg: string) => void;
 }
 
+/** Quem pediu um comando que não nasceu de mensagem de thread (slash command, menção): recebe o desfecho. */
+export interface CommandCallbacks {
+  onAck(result: Record<string, unknown> | undefined): void;
+  /** Razão do `command.error`, ou o aviso de expiração na fila. */
+  onError(reason: string): void;
+}
+
+/** `sent`: entregue à máquina; `queued`: máquina offline, na fila por 1 h; `failed`: não deu para enfileirar. */
+export type SubmitResult = "sent" | "queued" | "failed";
+
 export interface CommandBridge {
+  /**
+   * Envia um comando com origem por callback, com a mesma fila offline das mensagens de thread (sem reações). A
+   * origem fica só em memória: se o relay reiniciar com o comando na fila, o ack após a drenagem é ignorado.
+   */
+  submit(machine: string, cmd: RelayCommand, cb: CommandCallbacks): SubmitResult;
   /** Mensagem nova numa thread; nunca rejeita. */
   onThreadMessage(msg: ThreadMessage): Promise<void>;
   /** Evento de agente; só `command.ack`/`command.error` de comandos enviados por aqui têm efeito. */
@@ -52,10 +67,13 @@ export interface CommandBridge {
   dispose(): void;
 }
 
-/** Comando enviado aguardando ack: onde reagir e se a mensagem tem ⏳ para tirar. */
+/** De onde veio o comando: mensagem de thread (reações) ou callback (slash command, menção). */
+type Origin = { kind: "thread"; threadId: string } | { kind: "callback"; cb: CommandCallbacks };
+
+/** Comando enviado aguardando ack: a origem e, para mensagem de thread, se ela tem ⏳ para tirar. */
 interface Inflight {
   machine: string;
-  threadId: string;
+  origin: Origin;
   queued: boolean;
   sentAt: number;
 }
@@ -69,6 +87,8 @@ interface Inflight {
  * - Online: envia e só reage no ack (✅) ou no erro (❌ + razão). Offline: grava em `pending_commands` com validade de
  *   1 h e reage ⏳; quando a máquina conecta, a fila é reenviada como foi gravada (mesmo envelope). O que passar de
  *   1 h troca ⏳ por ❌ com aviso.
+ * - `submit` leva a mesma fila a comandos de slash command/menção: a origem é um callback (sem reações), que recebe o
+ *   ack, o erro ou o aviso de expiração.
  * - As chamadas ao Discord de uma mesma mensagem são feitas em série (o ⏳ nunca é removido antes de ter sido posto);
  *   falhas vão para `log`.
  */
@@ -78,6 +98,8 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
   const relayMachine = deps.relayMachine ?? "relay/vps";
   const log = deps.log ?? ((m: string) => { console.error(m); });
   const inflight = new Map<string, Inflight>();
+  /** Callbacks dos comandos na fila (por `commandId`), até a drenagem ou a expiração. */
+  const queuedCallbacks = new Map<string, CommandCallbacks>();
   const chains = new Map<string, Promise<void>>();
   let timer: NodeJS.Timeout | undefined;
 
@@ -114,6 +136,12 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
   const expire = (): void => {
     const now = Date.now();
     for (const row of db.pendingCommands.expireBefore(now)) {
+      const cb = queuedCallbacks.get(row.commandId);
+      if (cb !== undefined) {
+        queuedCallbacks.delete(row.commandId);
+        callback(row.commandId, () => { cb.onError(EXPIRED_TEXT); });
+        continue;
+      }
       const cmd = parsePayload(row);
       const threadId = cmd === undefined ? undefined : threadOfCommand(cmd);
       const messageId = row.discordMessageId ?? row.commandId;
@@ -142,9 +170,13 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
       }
       if (!hub.send(machine, cmd)) return; // caiu de novo: o resto espera a próxima conexão
       db.pendingCommands.remove(row.commandId);
+      const cb = queuedCallbacks.get(cmd.commandId);
+      queuedCallbacks.delete(cmd.commandId);
       const threadId = threadOfCommand(cmd);
-      if (threadId !== undefined) {
-        inflight.set(cmd.commandId, { machine, threadId, queued: true, sentAt: Date.now() });
+      if (cb !== undefined) {
+        inflight.set(cmd.commandId, { machine, origin: { kind: "callback", cb }, queued: true, sentAt: Date.now() });
+      } else if (threadId !== undefined) {
+        inflight.set(cmd.commandId, { machine, origin: { kind: "thread", threadId }, queued: true, sentAt: Date.now() });
       }
     }
   };
@@ -163,24 +195,45 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
       return;
     }
 
-    const machine = session.machine;
     const cmd: RelayCommand = { ...newEnvelope(relayMachine), type: "session.send", commandId: messageId, sessionId: session.sessionId, text };
+    dispatch(session.machine, cmd, { kind: "thread", threadId });
+  };
+
+  /** Envia já, ou grava na fila (1 h) e avisa a origem; drena se a máquina conectou no meio do caminho. */
+  const dispatch = (machine: string, cmd: RelayCommand, origin: Origin): SubmitResult => {
+    const { commandId } = cmd;
     if (hub.isOnline(machine) && hub.send(machine, cmd)) {
-      inflight.set(messageId, { machine, threadId, queued: false, sentAt: Date.now() });
-      return;
+      inflight.set(commandId, { machine, origin, queued: false, sentAt: Date.now() });
+      return "sent";
     }
     const now = Date.now();
     try {
       db.pendingCommands.add({
-        commandId: messageId, machine, payload: JSON.stringify(cmd), createdAt: now, expiresAt: now + COMMAND_TTL_MS, discordMessageId: messageId,
+        commandId, machine, payload: JSON.stringify(cmd), createdAt: now, expiresAt: now + COMMAND_TTL_MS,
+        ...(origin.kind === "thread" ? { discordMessageId: commandId } : {}),
       });
     } catch (e) {
-      log(`${machine}: falha ao enfileirar o comando ${messageId}: ${(e as Error).message}`);
-      return;
+      log(`${machine}: falha ao enfileirar o comando ${commandId}: ${(e as Error).message}`);
+      return "failed";
     }
-    discord(messageId, "falha ao reagir", () => port.react(threadId, messageId, QUEUED));
+    if (origin.kind === "thread") {
+      const { threadId } = origin;
+      discord(commandId, "falha ao reagir", () => port.react(threadId, commandId, QUEUED));
+    } else {
+      queuedCallbacks.set(commandId, origin.cb);
+    }
     // A máquina pode ter conectado entre a checagem e a gravação: o `online` já drenou a fila vazia.
     if (hub.isOnline(machine)) drain(machine);
+    return "queued";
+  };
+
+  /** Chama o callback de uma origem; se ele lançar, só loga. */
+  const callback = (commandId: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      log(`callback do comando ${commandId}: ${(e as Error).message}`);
+    }
   };
 
   const onAck = (machine: string, ev: AgentEvent): void => {
@@ -188,7 +241,12 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
     const f = inflight.get(ev.commandId);
     if (f === undefined || f.machine !== machine) return;
     inflight.delete(ev.commandId);
-    const { threadId } = f;
+    if (f.origin.kind === "callback") {
+      const { cb } = f.origin;
+      callback(ev.commandId, ev.type === "command.ack" ? () => { cb.onAck(ev.result); } : () => { cb.onError(ev.reason); });
+      return;
+    }
+    const { threadId } = f.origin;
     const messageId = ev.commandId;
     if (f.queued) discord(messageId, "falha ao tirar ⏳", () => port.removeReaction(threadId, messageId, QUEUED));
     if (ev.type === "command.ack") {
@@ -210,6 +268,14 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
   };
 
   return {
+    submit(machine, cmd, cb) {
+      try {
+        return dispatch(machine, cmd, { kind: "callback", cb });
+      } catch (e) {
+        log(`${machine}: ${cmd.type} ${cmd.commandId}: ${(e as Error).message}`);
+        return "failed";
+      }
+    },
     onThreadMessage: (msg) => guard(`mensagem ${msg.messageId}`, () => { onThreadMessage(msg); }),
     onAck: (machine, ev) => guard(`${machine}: ${ev.type}`, () => { onAck(machine, ev); }),
     onMachineOnline: (machine) => guard(`${machine}: fila`, () => { drain(machine); }),

@@ -17,11 +17,27 @@ export function channelName(machine: string): string {
   return machine.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 }
 
-/** `<hostname>/<usuario> · <SO> · Claude Code <versão> · <conta>`, a partir do que o banco sabe da máquina. */
+/**
+ * `<hostname>/<usuario> · <SO> · Claude Code <versão> · <conta>`, a partir do que o banco sabe da máquina, com
+ * `· filtro: <conta>` no fim quando o filtro de conta está ligado.
+ */
 export function machineTopic(db: Db, machine: string): string {
   const m = db.machines.getByName(machine);
   const os = m?.os == null ? "—" : (OS_LABEL[m.os] ?? m.os);
-  return truncate(`${machine} · ${os} · Claude Code ${m?.claudeVersion ?? "—"} · ${m?.claudeAccount ?? "—"}`, TOPIC_MAX);
+  const filter = m?.filterAccount == null ? "" : ` · filtro: ${m.filterAccount}`;
+  return truncate(`${machine} · ${os} · Claude Code ${m?.claudeVersion ?? "—"} · ${m?.claudeAccount ?? "—"}${filter}`, TOPIC_MAX);
+}
+
+const sameAccount = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * A máquina está silenciada: há filtro de conta e a conta do último `hello` é outra (ou desconhecida). Comparação
+ * sem diferenciar maiúsculas.
+ */
+export function isSilenced(db: Db, machine: string): boolean {
+  const m = db.machines.getByName(machine);
+  if (m?.filterAccount == null) return false;
+  return m.claudeAccount === null || !sameAccount(m.claudeAccount, m.filterAccount);
 }
 
 const hhmm = (d: Date): string =>
@@ -80,6 +96,8 @@ export interface RouterDeps {
 export interface Router {
   /** Pastas de projeto informadas no último `agent.hello` da máquina. */
   projectsOf(machine: string): string[];
+  /** Reaplica o tópico do canal da máquina (ex.: o filtro de conta mudou), pelo mesmo controle de rate limit. */
+  refreshTopic(machine: string): void;
   /** Resolve quando todos os eventos já recebidos foram processados. */
   idle(): Promise<void>;
   dispose(): void;
@@ -89,7 +107,8 @@ export interface Router {
  * Liga os eventos do hub ao Discord. Os eventos de cada máquina são processados em série (ordem garantida: thread
  * antes do post, fatias em sequência). Edição de tópico nunca é aguardada no caminho dos eventos: `hello`, `online`
  * e `offline` só atualizam o tópico desejado de um `LatestOnlyUpdater` por canal (no máximo 1 edição em voo,
- * intervalo mínimo de 300 s, só o último valor aplicado). Erros vão para `log`, nunca derrubam o processo nem
+ * intervalo mínimo de 300 s, só o último valor aplicado). Com filtro de conta ligado e a conta da máquina diferente,
+ * nada de sessão é postado nem vira thread (o hello passa). Erros vão para `log`, nunca derrubam o processo nem
  * travam a fila.
  */
 export function createRouter(deps: RouterDeps): Router {
@@ -97,6 +116,8 @@ export function createRouter(deps: RouterDeps): Router {
   const log: Log = deps.log ?? ((m) => { console.error(m); });
   const channelFor = machineChannelResolver(db, port);
   const projects = new Map<string, string[]>();
+  /** Desde quando a máquina está offline (para o tópico); ausente = online ou nunca vista. */
+  const offlineSince = new Map<string, Date>();
   const queues = new Map<string, Promise<void>>();
   const topics = new LatestOnlyUpdater((channelId, topic) => port.editChannelTopic(channelId, topic), log);
 
@@ -179,6 +200,11 @@ export function createRouter(deps: RouterDeps): Router {
   };
 
   const handle = (machine: string, e: AgentEvent): Promise<void> => {
+    // Filtro de conta: nada de thread nem post para a máquina enquanto a conta dela for outra. O hello sempre passa
+    // (é ele que atualiza a conta); aviso sem sessão é da máquina, não de uma sessão, e também passa.
+    if (e.type !== "agent.hello" && !(e.type === "agent.warning" && e.sessionId === undefined) && isSilenced(db, machine)) {
+      return Promise.resolve();
+    }
     switch (e.type) {
       case "agent.hello": return onHello(machine, e);
       case "session.list": return onSessionList(machine, e);
@@ -190,18 +216,19 @@ export function createRouter(deps: RouterDeps): Router {
     }
   };
 
-  const setTopic = (machine: string, offline: boolean): void => {
+  const setTopic = (machine: string): void => {
     const channelId = db.machines.getByName(machine)?.channelId;
     if (channelId == null) return; // máquina ainda sem canal: o hello cria com o tópico certo
     const topic = machineTopic(db, machine);
-    topics.set(channelId, offline ? truncate(`🔴 máquina offline desde ${hhmm(new Date())} · ${topic}`, TOPIC_MAX) : topic);
+    const since = offlineSince.get(machine);
+    topics.set(channelId, since !== undefined ? truncate(`🔴 máquina offline desde ${hhmm(since)} · ${topic}`, TOPIC_MAX) : topic);
   };
 
   const onEvent = (machine: string, e: AgentEvent): void => {
     enqueue(`events:${machine}`, `${machine}: ${e.type}`, () => handle(machine, e));
   };
-  const onOnline = (machine: string): void => { setTopic(machine, false); };
-  const onOffline = (machine: string): void => { setTopic(machine, true); };
+  const onOnline = (machine: string): void => { offlineSince.delete(machine); setTopic(machine); };
+  const onOffline = (machine: string): void => { offlineSince.set(machine, new Date()); setTopic(machine); };
 
   hub.on("event", onEvent);
   hub.on("online", onOnline);
@@ -209,6 +236,7 @@ export function createRouter(deps: RouterDeps): Router {
 
   return {
     projectsOf: (machine) => [...(projects.get(machine) ?? [])],
+    refreshTopic: setTopic,
     async idle() {
       while (queues.size > 0) await Promise.all(queues.values());
     },

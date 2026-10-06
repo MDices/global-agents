@@ -1,17 +1,24 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   EmbedBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
+  Routes,
   ThreadAutoArchiveDuration,
   type CategoryChannel,
   type Guild,
+  type Interaction,
   type Message,
   type MessageCreateOptions,
   type TextChannel,
 } from "discord.js";
 import type { RelayConfig } from "../config.js";
+import { SLASH_COMMANDS, type SlashInteraction, type SlashView } from "./slash.js";
 
 export interface EmbedField {
   name: string;
@@ -71,6 +78,79 @@ export function createBot(
 /** Nunca menciona ninguém a partir de texto vindo das máquinas. */
 const NO_MENTIONS = { parse: [] } as const;
 
+export function embedFrom(spec: EmbedSpec): EmbedBuilder {
+  const embed = new EmbedBuilder();
+  if (spec.title !== undefined) embed.setTitle(spec.title);
+  if (spec.description !== undefined) embed.setDescription(spec.description);
+  if (spec.color !== undefined) embed.setColor(spec.color);
+  if (spec.fields !== undefined) embed.addFields(spec.fields.map((f) => ({ name: f.name, value: f.value, inline: f.inline ?? false })));
+  if (spec.footer !== undefined) embed.setFooter({ text: spec.footer });
+  return embed;
+}
+
+/**
+ * Registra `/novo`, `/sessoes`, `/parar` e `/filtro` no guild (comandos de guild valem na hora). Usa o REST do
+ * próprio client, já autenticado; chamar depois do `ready` (precisa de `client.application`).
+ */
+export async function registerSlashCommands(client: Client, guildId: string): Promise<void> {
+  const appId = client.application?.id;
+  if (appId === undefined) throw new Error("aplicação do bot ainda não carregada (chame depois do ready)");
+  await client.rest.put(Routes.applicationGuildCommands(appId, guildId), { body: SLASH_COMMANDS });
+}
+
+function messageFrom(v: SlashView) {
+  const buttons = v.buttons?.map((b) => new ButtonBuilder()
+    .setCustomId(b.customId)
+    .setLabel(b.label)
+    .setStyle(b.style === "danger" ? ButtonStyle.Danger : ButtonStyle.Secondary)
+    .setDisabled(b.disabled ?? false));
+  return {
+    ...(v.content !== undefined ? { content: v.content } : {}),
+    ...(v.embeds !== undefined ? { embeds: v.embeds.map(embedFrom) } : {}),
+    ...(buttons !== undefined
+      ? { components: buttons.length === 0 ? [] : [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)] }
+      : {}),
+    allowedMentions: NO_MENTIONS,
+  };
+}
+
+/** Converte a interação do discord.js no formato de `slash.ts`; `undefined` para tipos que o relay não trata. */
+export function toSlashInteraction(i: Interaction): SlashInteraction | undefined {
+  const base = { id: i.id, channelId: i.channelId ?? "", user: { id: i.user.id, username: i.user.username } };
+  const ephemeral = (on: boolean) => (on ? { flags: MessageFlags.Ephemeral as const } : {});
+  if (i.isChatInputCommand()) {
+    return {
+      ...base,
+      kind: "command",
+      commandName: i.commandName,
+      options: { getString: (name) => i.options.getString(name), getSubcommand: () => i.options.getSubcommand(false) },
+      reply: (v, eph) => i.reply({ ...messageFrom(v), ...ephemeral(eph) }),
+      editReply: (v) => i.editReply(messageFrom(v)),
+    };
+  }
+  if (i.isAutocomplete()) {
+    const focused = i.options.getFocused(true);
+    return {
+      ...base,
+      kind: "autocomplete",
+      commandName: i.commandName,
+      focused: { name: focused.name, value: String(focused.value) },
+      respond: (choices) => i.respond(choices),
+    };
+  }
+  if (i.isButton()) {
+    return {
+      ...base,
+      kind: "button",
+      customId: i.customId,
+      update: (v) => i.update(messageFrom(v)),
+      editReply: (v) => i.editReply(messageFrom(v)),
+      reply: (v, eph) => i.reply({ ...messageFrom(v), ...ephemeral(eph) }),
+    };
+  }
+  return undefined;
+}
+
 export class DiscordJsPort implements DiscordPort {
   constructor(
     private readonly client: Client,
@@ -111,13 +191,7 @@ export class DiscordJsPort implements DiscordPort {
   }
 
   postEmbed(threadOrChannelId: string, spec: EmbedSpec): Promise<{ messageId: string }> {
-    const embed = new EmbedBuilder();
-    if (spec.title !== undefined) embed.setTitle(spec.title);
-    if (spec.description !== undefined) embed.setDescription(spec.description);
-    if (spec.color !== undefined) embed.setColor(spec.color);
-    if (spec.fields !== undefined) embed.addFields(spec.fields.map((f) => ({ name: f.name, value: f.value, inline: f.inline ?? false })));
-    if (spec.footer !== undefined) embed.setFooter({ text: spec.footer });
-    return this.send(threadOrChannelId, { embeds: [embed], allowedMentions: NO_MENTIONS });
+    return this.send(threadOrChannelId, { embeds: [embedFrom(spec)], allowedMentions: NO_MENTIONS });
   }
 
   async editChannelTopic(channelId: string, topic: string): Promise<void> {

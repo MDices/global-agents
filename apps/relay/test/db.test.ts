@@ -48,6 +48,19 @@ describe("machines", () => {
     expect(db.machines.getByTokenHash("h1")).toBeUndefined();
   });
 
+  it("setFilterAccount grava e limpa o filtro; getByChannel acha a máquina pelo canal", () => {
+    const db = openDb(":memory:");
+    db.machines.upsert({ name: "fedora/leonardo", tokenHash: "h" });
+    expect(db.machines.getByName("fedora/leonardo")?.filterAccount).toBeNull();
+    db.machines.setFilterAccount("fedora/leonardo", "x@y.com");
+    expect(db.machines.getByName("fedora/leonardo")?.filterAccount).toBe("x@y.com");
+    db.machines.setFilterAccount("fedora/leonardo", null);
+    expect(db.machines.getByName("fedora/leonardo")?.filterAccount).toBeNull();
+    expect(db.machines.getByChannel("ch-9")).toBeUndefined();
+    db.machines.setChannel("fedora/leonardo", "ch-9");
+    expect(db.machines.getByChannel("ch-9")?.name).toBe("fedora/leonardo");
+  });
+
   it("touch grava metadados e last_seen", () => {
     const db = openDb(":memory:");
     db.machines.upsert({ name: "m/u", tokenHash: "h" });
