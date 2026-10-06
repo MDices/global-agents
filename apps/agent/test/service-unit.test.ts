@@ -29,6 +29,9 @@ describe("renderUnit", () => {
   it("cita caminhos com espaço e escapa % e aspas", () => {
     expect(quoteExecArg("/a b/node")).toBe('"/a b/node"');
     expect(quoteExecArg("/a/100%/x")).toBe("/a/100%%/x");
+    expect(quoteExecArg("/a/$HOME/x")).toBe("/a/$$HOME/x");
+    expect(quoteExecArg("/a b/${X}")).toBe('"/a b/$${X}"');
+    expect(quoteExecArg("/a\\b")).toBe('"/a\\\\b"');
     expect(quoteExecArg('/a"b')).toBe('"/a\\"b"');
     expect(renderUnit("/o p/node", CLI)).toContain(`ExecStart="/o p/node" ${CLI} run`);
   });
@@ -72,8 +75,10 @@ describe("installUnit / uninstallUnit", () => {
     expect(uninstallUnit(path)).toBe("removed");
     expect(existsSync(path)).toBe(false);
     mkdirSync(d, { recursive: true });
-    writeFileSync(path, "[Service]\nExecStart=/bin/true\n");
+    const foreign = "[Unit]\nDescription=outra coisa\n# veja global-agents\n[Service]\nExecStart=/bin/true\n";
+    writeFileSync(path, foreign);
     expect(uninstallUnit(path)).toBe("foreign");
-    expect(existsSync(path)).toBe(true);
+    expect(installUnit(path, NODE, CLI)).toBe("foreign");
+    expect(readFileSync(path, "utf8")).toBe(foreign);
   });
 });
