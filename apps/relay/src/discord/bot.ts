@@ -42,10 +42,15 @@ export interface DiscordPort {
   editChannelTopic(channelId: string, topic: string): Promise<void>;
 }
 
-export function createBot(cfg: Pick<RelayConfig, "discordToken">): { client: Client; ready: Promise<void> } {
+export function createBot(
+  cfg: Pick<RelayConfig, "discordToken">,
+  log: (msg: string) => void = (m) => { console.error(m); },
+): { client: Client; ready: Promise<void> } {
   const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
+  // Sem listener, um `error` emitido pelo client derrubaria o processo.
+  client.on(Events.Error, (e) => { log(`discord: ${e.message}`); });
   const ready = new Promise<void>((resolve, reject) => {
     client.once(Events.ClientReady, () => { resolve(); });
     client.login(cfg.discordToken).catch(reject);
@@ -110,7 +115,8 @@ export class DiscordJsPort implements DiscordPort {
 
   async editChannelTopic(channelId: string, topic: string): Promise<void> {
     const channel = await this.textChannel(channelId);
-    await channel.setTopic(topic);
+    // Edição de canal tem rate limit apertado (~2 a cada 10 min): não gasta com tópico igual.
+    if (channel.topic !== topic) await channel.setTopic(topic);
   }
 
   private async ensureCategory(guild: Guild): Promise<CategoryChannel> {
