@@ -169,11 +169,13 @@ export class RelayClient extends EventEmitter<RelayClientEvents> {
       await sendRaw(this.makeHello());
       while (this.ws === ws && ws.readyState === WebSocket.OPEN && this.outbox.size() > 0) {
         const r = await this.outbox.drain(sendRaw);
-        // Nada andou e ainda há conteúdo: o socket falhou; o `close` cuida da reconexão.
-        if (r.sent === 0 && r.skipped === 0 && this.outbox.size() > 0) return;
+        // Nada andou e ainda há conteúdo: o socket falhou ou o drain devolvido era o de uma conexão anterior
+        // ainda em andamento. Derruba esta conexão para não ficar aberta sem nunca ficar pronta.
+        if (r.sent === 0 && r.skipped === 0 && this.outbox.size() > 0) { if (this.ws === ws) ws.terminate(); return; }
       }
     } catch (e) {
       this.emit("warning", `relay: falha no envio inicial: ${(e as Error).message}`);
+      if (this.ws === ws) ws.terminate();
       return;
     }
     if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;

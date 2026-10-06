@@ -194,6 +194,20 @@ describe("RelayClient", () => {
     await vi.waitFor(() => { expect(relay?.types(1)).toEqual(["agent.hello"]); }, { timeout: 1000 });
   });
 
+  it("falha no envio inicial derruba a conexão em vez de ficar aberta sem nunca ficar pronta", async () => {
+    relay = await FakeRelay.start();
+    let calls = 0;
+    const c = new RelayClient({ url: relay.url(), token: "tok", outbox: new Outbox(dir), backoff: { minMs: 20, maxMs: 200 }, pingMs: 1000,
+      hello: () => { calls++; if (calls === 1) throw new Error("hello quebrou"); return hello(); } });
+    const warnings: string[] = [];
+    c.on("warning", (w: string) => warnings.push(w));
+    client = c;
+    c.start();
+    await vi.waitFor(() => { expect(relay?.types(1)).toEqual(["agent.hello"]); });
+    await vi.waitFor(() => { expect(c.isConnected()).toBe(true); });
+    expect(warnings.some((w) => w.includes("hello quebrou"))).toBe(true);
+  });
+
   it("stop() fecha com 1000 e não reconecta", async () => {
     relay = await FakeRelay.start();
     const { c } = makeClient(relay.url());
