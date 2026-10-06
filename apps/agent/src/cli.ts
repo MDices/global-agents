@@ -10,12 +10,13 @@ import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
 import { installUnit, uninstallUnit, unitPath } from "./service/systemd.js";
+import { resolveToken } from "./token.js";
 import { runWindowsService, serviceBackend, windowsUserId, type WindowsServiceRun } from "./service/windows.js";
 
 const USAGE = `uso: global-agents <comando> [opções]
 
 comandos:
-  install --relay <url> --token <token> [--fingerprint <fp>] [--project <dir>]... [--service]
+  install --relay <url> [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
             --service também grava a unidade systemd --user (Linux) ou mostra o comando do
             Agendador de Tarefas ao logon (Windows; com --apply o schtasks é executado)
@@ -24,6 +25,7 @@ comandos:
             systemd (Linux) ou a tarefa agendada (Windows)
   run       roda o agente em primeiro plano
   doctor    diagnostica o ambiente (claude, hooks, sockets, relay); sai 1 se algo falhar
+            o token também pode vir da variável GLOBAL_AGENTS_TOKEN (não fica no histórico do shell)
   status    mostra a config (sem o token) e se o agente está rodando
 
 opção global: --config <arquivo> (padrão ${DEFAULT_CONFIG_PATH})`;
@@ -95,6 +97,7 @@ async function installService(configFile: string, apply: boolean): Promise<void>
     return;
   }
   const cli = fileURLToPath(import.meta.url);
+  if (apply && backend === "systemd") console.warn("aviso: --apply só vale no Windows; no Linux nada é executado (rode os comandos systemctl impressos)");
   if (backend === "schtasks") {
     const custom = configFile === resolve(DEFAULT_CONFIG_PATH) ? undefined : configFile;
     await runWindowsService(winRun("install", apply, cli, custom));
@@ -118,6 +121,7 @@ async function uninstallService(apply: boolean): Promise<void> {
     console.log("nota: --service só existe no Linux (systemd --user) e no Windows (Agendador de Tarefas); nada foi feito nesta plataforma");
     return;
   }
+  if (apply && backend === "systemd") console.warn("aviso: --apply só vale no Windows; no Linux nada é executado (rode os comandos systemctl impressos)");
   if (backend === "schtasks") {
     await runWindowsService(winRun("uninstall", apply, fileURLToPath(import.meta.url)));
     return;
@@ -132,8 +136,8 @@ async function uninstallService(apply: boolean): Promise<void> {
 
 async function install(a: Args): Promise<void> {
   const relayUrl = one(a, "--relay");
-  const token = one(a, "--token");
-  if (relayUrl === undefined || token === undefined) throw new UsageError("install exige --relay e --token");
+  const token = resolveToken(one(a, "--token"), process.env);
+  if (relayUrl === undefined || token === undefined) throw new UsageError("install exige --relay e --token (ou a variável GLOBAL_AGENTS_TOKEN)");
   const fingerprint = one(a, "--fingerprint");
   const path = configPath(a);
   // Reinstalar mantém o que não foi passado agora (machineName, porta, dataDir…).

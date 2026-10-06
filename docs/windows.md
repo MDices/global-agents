@@ -19,11 +19,12 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
    ```
 2. Rode o instalador (PowerShell normal, **não** precisa de administrador):
    ```powershell
-   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Token "<token>" -Fingerprint "<fp>" -Project C:\dev\meu-projeto
+   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Fingerprint "<fp>" -Project C:\dev\meu-projeto
    ```
    Se a política de execução bloquear: `powershell -ExecutionPolicy Bypass -File .\deploy\agent\install-windows.ps1 ...`.
    Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` a partir de um XML (`schtasks /Create /TN global-agents /XML ... /F`; gatilho no logon do seu usuário, token interativo, nível limitado, sem limite de tempo, reinício em falha, sem condição de bateria), inicia o agente e roda o `doctor`.
-3. Para ver o XML da tarefa sem registrar nada, rode manualmente `node apps\agent\dist\cli.js install --relay ... --token ... --service` (sem `--apply`).
+   O token é pedido de forma oculta (não vai para o histórico do PowerShell); também pode vir da variável `GLOBAL_AGENTS_TOKEN`.
+3. Para ver o XML da tarefa sem registrar nada, rode `node apps\agent\dist\cli.js install --relay ... --service` (sem `--apply`) com `GLOBAL_AGENTS_TOKEN` definido. Não cole o XML/comando impresso no cmd: use sempre `--apply`, que executa o `schtasks` sem passar por shell.
 
 Não é preciso administrador: a tarefa é do seu usuário e roda com privilégio limitado. O agente roda **sem janela de console**; não há o que fechar por engano.
 
@@ -48,7 +49,7 @@ A config em `~/.global-agents` é mantida. `crossSessionInbound` em `~/.claude/s
 Marque e cole a saída/observações de volta no chat.
 
 - [ ] `pnpm build` no Windows termina sem erro e `apps\agent\dist\hooks\scripts\` contém `global-agents-hook.ps1` e `global-agents-hook.sh`.
-- [ ] `install-windows.ps1` conclui; `schtasks /Query /TN global-agents /V /FO LIST` mostra o usuário correto (`Admin`) e o gatilho "Ao fazer logon" só para ele; o `/XML` mostra `PT0S`.
+- [ ] `install-windows.ps1` conclui; `schtasks /Query /TN global-agents /V /FO LIST` mostra o seu usuário (o mesmo de `whoami`) e o gatilho "Ao fazer logon" só para ele; o `/XML` mostra `PT0S`.
 - [ ] Instalou **sem** administrador, e ao iniciar a tarefa não aparece janela de console (o `node.exe` aparece no Gerenciador de Tarefas).
 - [ ] **Injeção via named pipe:** com uma sessão `claude --bg --name teste`, mande uma mensagem pelo Discord e confira no transcript que virou turno (o agente usa a linha de auth com `peerToken` do `.key`).
 - [ ] **`--bg` + `attach`:** criar sessão pelo Discord (`/claude new` ou equivalente), listar com `claude agents`, `claude attach <id>` abre e mostra a conversa.

@@ -1,19 +1,25 @@
-<#
+﻿<#
 .SYNOPSIS
   Instala o agente global-agents no Windows (rodar dentro do repositório clonado, como o usuário logado).
 .EXAMPLE
-  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Token xxxx -Fingerprint AA:BB:... -Project C:\dev\meu-projeto
+  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Fingerprint AA:BB:... -Project C:\dev\meu-projeto
 #>
 param(
-  [Parameter(Mandatory = $true)][string]$Relay,
-  [Parameter(Mandatory = $true)][string]$Token,
+  [Parameter(Mandatory = $true)][ValidatePattern('^wss?://')][string]$Relay,
+  [System.Security.SecureString]$Token,
   [string]$Fingerprint,
   [string[]]$Project = @(),
   [switch]$SkipBuild
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false  # PS 7.3+: o doctor pode sair com 1 sem lançar
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+if (-not $Token) { $Token = Read-Host -AsSecureString 'Token do relay' }
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Token)
+try { $env:GLOBAL_AGENTS_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 function Get-VersionFrom([string]$text) {
   $m = [regex]::Match($text, '\d+\.\d+\.\d+')
@@ -48,10 +54,10 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $cli)) { throw "não achei $cli; rode sem -SkipBuild" }
 
 Write-Host '== 3. configuração, hooks e inicialização no logon (Agendador de Tarefas)'
-$installArgs = @($cli, 'install', '--relay', $Relay, '--token', $Token, '--service', '--apply')
+$installArgs = @($cli, 'install', '--relay', $Relay, '--service', '--apply')
 if ($Fingerprint) { $installArgs += @('--fingerprint', $Fingerprint) }
 foreach ($p in $Project) { $installArgs += @('--project', $p) }
-Invoke-Native 'install' { node @installArgs }
+try { Invoke-Native 'install' { node @installArgs } } finally { Remove-Item Env:GLOBAL_AGENTS_TOKEN -ErrorAction SilentlyContinue }
 
 Write-Host '== 4. iniciar agora (sem esperar o próximo logon)'
 Invoke-Native 'schtasks /Run' { schtasks /Run /TN global-agents }

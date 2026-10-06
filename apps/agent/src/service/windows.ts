@@ -119,7 +119,7 @@ export async function runWindowsService(r: WindowsServiceRun): Promise<void> {
     } finally {
       tmp.cleanup();
     }
-    r.log(`tarefa "${TASK_NAME}" registrada para ${r.userId}: o agente inicia no próximo logon, sem janela de console. Para iniciar agora: schtasks /Run /TN ${TASK_NAME}`);
+    r.log(`tarefa "${TASK_NAME}" registrada para ${r.userId}: o agente inicia no próximo logon, sem janela de console. Para iniciar agora: schtasks /Run /TN ${TASK_NAME}\nse trocar a versão do Node, reexecute 'install --service --apply' para atualizar o caminho do Node na tarefa.`);
     return;
   }
   if (!r.apply) {
