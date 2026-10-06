@@ -3,6 +3,7 @@ import { cpSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG_PATH, installConfig, loadConfig, saveConfig } from "./config.js";
+import { defaultDeps, runDoctor } from "./doctor.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
@@ -14,6 +15,7 @@ comandos:
             grava a config, copia os scripts de hook e instala os hooks do Claude Code
   uninstall remove os hooks do Claude Code (a config é mantida)
   run       roda o agente em primeiro plano
+  doctor    diagnostica o ambiente (claude, hooks, sockets, relay); sai 1 se algo falhar
   status    mostra a config (sem o token) e se o agente está rodando
 
 opção global: --config <arquivo> (padrão ${DEFAULT_CONFIG_PATH})`;
@@ -126,6 +128,17 @@ async function status(a: Args): Promise<number> {
   return 1;
 }
 
+async function doctor(a: Args): Promise<number> {
+  const path = configPath(a);
+  let claudeBin: string | undefined;
+  try { claudeBin = loadConfig(path).claudeBin; } catch { /* o check de config reporta */ }
+  const checks = await runDoctor(defaultDeps(path, claudeBin));
+  for (const c of checks) console.log(`${c.ok ? "✅" : "❌"} ${c.name.padEnd(24)} ${c.detail}`);
+  const failed = checks.filter((c) => !c.ok).length;
+  console.log(failed === 0 ? "\ntudo certo" : `\n${failed} problema(s) encontrado(s)`);
+  return failed === 0 ? 0 : 1;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   if (cmd === undefined || cmd === "--help" || cmd === "-h" || cmd === "help") {
@@ -146,6 +159,8 @@ async function main(argv: string[]): Promise<number> {
       return -1; // continua rodando até SIGINT/SIGTERM
     case "status":
       return status(a);
+    case "doctor":
+      return doctor(a);
     default:
       throw new UsageError(`comando desconhecido: ${cmd}`);
   }
