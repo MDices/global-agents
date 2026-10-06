@@ -2,7 +2,10 @@
   "name": "global-agents",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.0.0", "pnpm": ">=10" },
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10"
+  },
   "packageManager": "pnpm@10.34.6",
   "scripts": {
     "typecheck": "pnpm -r typecheck",
@@ -17,5 +20,10 @@
     "eslint": "^9.34.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
   }
 }

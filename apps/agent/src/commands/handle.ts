@@ -1,4 +1,6 @@
-import { newEnvelope, type AgentEvent, type PermissionBehavior, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
+import {
+  newEnvelope, type AgentEvent, type PermissionBehavior, type RelayCommand, type SessionInfo, type SlashCommandName,
+} from "@global-agents/protocol";
 import type { InboxTarget } from "../claude/inject.js";
 import type { SessionRegistry } from "../claude/registry.js";
 import type { SpawnInput } from "../claude/spawn.js";
@@ -13,6 +15,17 @@ const NO_INBOX = "sessão sem inbox (reinicie a sessão)";
 const NOT_BACKGROUND = "só sessões em background podem ser paradas pelo Discord; use claude /exit no terminal";
 const NO_PERMISSIONS = "permissões ainda não suportadas";
 const PERMISSION_GONE = "pedido de permissão não encontrado ou já resolvido";
+const SLASH_INTERACTIVE = "essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg";
+const SLASH_BUSY = "sessão ocupada; tente quando o turno terminar";
+const SLASH_RUNNING = "já há um comando do Claude rodando nessa sessão; espere ele terminar";
+/** Comandos que não mexem na conversa: podem rodar com a sessão ocupada. */
+const SLASH_WHILE_BUSY: ReadonlySet<SlashCommandName> = new Set(["usage", "cost", "status"]);
+
+export interface SlashInput {
+  bgId: string;
+  command: SlashCommandName;
+  args?: string;
+}
 
 export interface CommandDeps {
   machine: string;
@@ -21,6 +34,8 @@ export interface CommandDeps {
   spawn: (input: SpawnInput) => Promise<{ sessionId: string; bgId: string }>;
   stop: (bgId: string) => Promise<void>;
   readRegistry: (pid: number) => SessionRegistry | undefined;
+  /** Roda o slash command via `claude attach` (o real é `runSlash` com o `claudeBin` da config). */
+  slash: (input: SlashInput) => Promise<{ screen: string }>;
   /** `true` se o pedido existia e foi resolvido agora (T20). */
   onPermissionDecide?: (requestId: string, behavior: PermissionBehavior) => boolean;
 }
@@ -44,6 +59,8 @@ function redact(msg: string, reg: SessionRegistry | undefined): string {
  */
 export function createCommandHandler(deps: CommandDeps): CommandHandler {
   const cache = new Map<string, Promise<AgentEvent>>();
+  /** `bgId` com um `claude attach` aberto por nós: uma sessão não aguenta dois clientes anexados. */
+  const attached = new Set<string>();
 
   const ack = (commandId: string, result?: Record<string, unknown>): AgentEvent => ({
     ...newEnvelope(deps.machine),
@@ -89,6 +106,20 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
           if (s.bgId === undefined) throw new CommandError(NOT_BACKGROUND);
           await deps.stop(s.bgId);
           return ack(cmd.commandId);
+        }
+        case "session.slash": {
+          const s = findSession(cmd.sessionId);
+          if (s.bgId === undefined) throw new CommandError(SLASH_INTERACTIVE);
+          if (s.status === "busy" && !SLASH_WHILE_BUSY.has(cmd.command)) throw new CommandError(SLASH_BUSY);
+          if (attached.has(s.bgId)) throw new CommandError(SLASH_RUNNING);
+          const bgId = s.bgId;
+          attached.add(bgId);
+          try {
+            const r = await deps.slash({ bgId, command: cmd.command, ...(cmd.args !== undefined ? { args: cmd.args } : {}) });
+            return ack(cmd.commandId, { screen: r.screen });
+          } finally {
+            attached.delete(bgId);
+          }
         }
         case "permission.decide": {
           if (deps.onPermissionDecide === undefined) throw new CommandError(NO_PERMISSIONS);

@@ -6,6 +6,7 @@ import { injectPrompt } from "./claude/inject.js";
 import { Inventory, type RunFn } from "./claude/inventory.js";
 import { readRegistry } from "./claude/registry.js";
 import { spawnSession, type SpawnRun } from "./claude/spawn.js";
+import { runSlash } from "./claude/slash.js";
 import { stopSession } from "./claude/stop.js";
 import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
 import type { AgentConfig } from "./config.js";
@@ -106,6 +107,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     spawn: (input) => spawnSession(input, { run, inventory }),
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),
+    slash: (input) => runSlash({ ...input, claudeBin: cfg.claudeBin }),
     ...deps.commands,
   });
   const version = agentVersion();

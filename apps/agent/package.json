@@ -1,7 +1,25 @@
 {
-  "name": "@global-agents/agent", "version": "0.1.0", "type": "module",
-  "bin": { "global-agents": "./dist/cli.js" },
-  "scripts": { "build": "tsc -p tsconfig.json", "postbuild": "rm -rf dist/hooks/scripts && mkdir -p dist/hooks && cp -r src/hooks/scripts dist/hooks/scripts", "typecheck": "tsc -p tsconfig.json --noEmit", "lint": "eslint src test", "test": "vitest run" },
-  "dependencies": { "@global-agents/protocol": "workspace:*", "zod": "^3.25.0", "ws": "^8.18.0" },
-  "devDependencies": { "@types/ws": "^8.5.0" }
+  "name": "@global-agents/agent",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "global-agents": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "postbuild": "rm -rf dist/hooks/scripts && mkdir -p dist/hooks && cp -r src/hooks/scripts dist/hooks/scripts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@global-agents/protocol": "workspace:*",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0"
+  }
 }

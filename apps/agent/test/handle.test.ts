@@ -1,13 +1,14 @@
-import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
+import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo, type SlashCommandName } from "@global-agents/protocol";
 import { describe, expect, it, vi } from "vitest";
 import type { InboxTarget } from "../src/claude/inject.js";
 import type { SessionRegistry } from "../src/claude/registry.js";
 import type { SpawnInput } from "../src/claude/spawn.js";
-import { createCommandHandler, type CommandDeps } from "../src/commands/handle.js";
+import { createCommandHandler, type CommandDeps, type SlashInput } from "../src/commands/handle.js";
 
 const MACHINE = "leo/fedora";
 const BG: SessionInfo = { sessionId: "s-bg", cwd: "/p", name: "bg", kind: "background", pid: 111, bgId: "a1b2c3d4" };
 const INTER: SessionInfo = { sessionId: "s-int", cwd: "/p", name: "int", kind: "interactive", pid: 222 };
+const BUSY: SessionInfo = { sessionId: "s-busy", cwd: "/p", name: "ocupada", kind: "background", status: "busy", pid: 333, bgId: "b0b0b0b0" };
 const NOPID: SessionInfo = { sessionId: "s-nopid", cwd: "/p", name: "x", kind: "background", bgId: "deadbeef" };
 const REG: Record<number, SessionRegistry> = {
   111: { pid: 111, sessionId: "s-bg", messagingSocketPath: "/run/cc/111.sock", peerToken: "tok-secreto", peerProtocol: 1 },
@@ -15,7 +16,7 @@ const REG: Record<number, SessionRegistry> = {
 };
 
 function deps(over: Partial<CommandDeps> = {}) {
-  const sessions = [BG, INTER, NOPID];
+  const sessions = [BG, INTER, NOPID, BUSY];
   const d = {
     machine: MACHINE,
     inventory: { find: (id: string) => sessions.find((s) => s.sessionId === id) },
@@ -23,6 +24,7 @@ function deps(over: Partial<CommandDeps> = {}) {
     spawn: vi.fn<(i: SpawnInput) => Promise<{ sessionId: string; bgId: string }>>(() => Promise.resolve({ sessionId: "novo", bgId: "0badf00d" })),
     stop: vi.fn<(b: string) => Promise<void>>(() => Promise.resolve()),
     readRegistry: vi.fn((pid: number) => REG[pid]),
+    slash: vi.fn<(i: SlashInput) => Promise<{ screen: string }>>(() => Promise.resolve({ screen: "Version: 2.1.292" })),
     ...over,
   };
   return d;
@@ -31,11 +33,83 @@ function deps(over: Partial<CommandDeps> = {}) {
 const env = () => newEnvelope("relay/relay");
 const send = (commandId: string, sessionId: string, text = "oi"): RelayCommand => ({ ...env(), type: "session.send", commandId, sessionId, text });
 const stop = (commandId: string, sessionId: string): RelayCommand => ({ ...env(), type: "session.stop", commandId, sessionId });
+const slashCmd = (commandId: string, sessionId: string, command: SlashCommandName, args?: string): RelayCommand =>
+  ({ ...env(), type: "session.slash", commandId, sessionId, command, ...(args !== undefined ? { args } : {}) });
 
 function expectValid(ev: AgentEvent): void {
   expect(AgentEventSchema.safeParse(ev).success).toBe(true);
   expect(ev.machine).toBe(MACHINE);
 }
+
+describe("session.slash", () => {
+  it("sessão em background → runSlash(bgId, comando, args) e ack com a tela", async () => {
+    const d = deps();
+    const ev = await createCommandHandler(d)(slashCmd("c1", "s-bg", "compact", "foco em testes"));
+    expect(d.slash).toHaveBeenCalledWith({ bgId: "a1b2c3d4", command: "compact", args: "foco em testes" });
+    expect(ev).toMatchObject({ type: "command.ack", commandId: "c1", result: { screen: "Version: 2.1.292" } });
+    expectValid(ev);
+  });
+
+  it("sem args não passa args", async () => {
+    const d = deps();
+    await createCommandHandler(d)(slashCmd("c1", "s-bg", "status"));
+    expect(d.slash).toHaveBeenCalledWith({ bgId: "a1b2c3d4", command: "status" });
+  });
+
+  it("sessão interativa → erro pedindo /bg, sem abrir o pty", async () => {
+    const d = deps();
+    const ev = await createCommandHandler(d)(slashCmd("c1", "s-int", "usage"));
+    expect(ev).toMatchObject({
+      type: "command.error",
+      reason: "essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg",
+    });
+    expect(d.slash).not.toHaveBeenCalled();
+  });
+
+  it("sessão busy + compact → erro ocupada", async () => {
+    const d = deps();
+    const ev = await createCommandHandler(d)(slashCmd("c1", "s-busy", "compact"));
+    expect(ev).toMatchObject({ type: "command.error", reason: "sessão ocupada; tente quando o turno terminar" });
+    expect(d.slash).not.toHaveBeenCalled();
+  });
+
+  it.each(["usage", "cost", "status"] as const)("sessão busy + %s → roda mesmo assim", async (command) => {
+    const d = deps();
+    const ev = await createCommandHandler(d)(slashCmd("c1", "s-busy", command));
+    expect(ev.type).toBe("command.ack");
+    expect(d.slash).toHaveBeenCalledWith({ bgId: "b0b0b0b0", command });
+  });
+
+  it.each(["hooks", "context", "model"] as const)("sessão busy + %s → erro ocupada", async (command) => {
+    const d = deps();
+    expect(await createCommandHandler(d)(slashCmd("c1", "s-busy", command))).toMatchObject({ type: "command.error", reason: expect.stringContaining("ocupada") });
+  });
+
+  it("sessão inexistente → não encontrada", async () => {
+    const d = deps();
+    expect(await createCommandHandler(d)(slashCmd("c1", "nada", "usage"))).toMatchObject({ type: "command.error", reason: "sessão não encontrada nesta máquina" });
+  });
+
+  it("falha do runSlash vira command.error com a mensagem", async () => {
+    const d = deps({ slash: vi.fn(() => Promise.reject(new Error("tempo esgotado esperando /usage terminar (20 s)"))) });
+    expect(await createCommandHandler(d)(slashCmd("c1", "s-bg", "usage")))
+      .toMatchObject({ type: "command.error", reason: "tempo esgotado esperando /usage terminar (20 s)" });
+  });
+
+  it("dois comandos na mesma sessão ao mesmo tempo: o segundo é recusado (um attach por vez)", async () => {
+    let release: (v: { screen: string }) => void = () => undefined;
+    const d = deps();
+    d.slash.mockImplementationOnce(() => new Promise<{ screen: string }>((r) => { release = r; }));
+    const h = createCommandHandler(d);
+    const first = h(slashCmd("c1", "s-bg", "usage"));
+    const second = await h(slashCmd("c2", "s-bg", "cost"));
+    expect(second).toMatchObject({ type: "command.error", reason: expect.stringContaining("já há um comando") });
+    release({ screen: "ok" });
+    expect(await first).toMatchObject({ type: "command.ack" });
+    expect(await h(slashCmd("c3", "s-bg", "cost"))).toMatchObject({ type: "command.ack" });
+    expect(d.slash).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("createCommandHandler", () => {
   it("session.send para sessão existente injeta no socket do registro e devolve ack", async () => {
