@@ -20,22 +20,35 @@ export function runClaude(
       env: cleanEnv(process.env),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
+    const signal = (sig: NodeJS.Signals): void => {
+      try {
+        if (process.platform !== "win32" && child.pid !== undefined) process.kill(-child.pid, sig);
+        else child.kill(sig);
+      } catch {
+        // processo já encerrado
+      }
+    };
+    let killTimer: NodeJS.Timeout | undefined;
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d: Buffer) => (stdout += d));
     child.stderr.on("data", (d: Buffer) => (stderr += d));
     const ms = opts.timeoutMs ?? 30000;
     const t = setTimeout(() => {
-      child.kill();
+      signal("SIGTERM");
+      killTimer = setTimeout(() => signal("SIGKILL"), 2000);
       reject(new Error(`claude ${args[0]} excedeu ${ms} ms`));
     }, ms);
     child.on("error", (e) => {
       clearTimeout(t);
+      clearTimeout(killTimer);
       reject(e);
     });
     child.on("close", (code) => {
       clearTimeout(t);
+      clearTimeout(killTimer);
       resolve({ code: code ?? -1, stdout, stderr });
     });
   });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -32,4 +32,6 @@ export function loadConfig(path: string = DEFAULT_PATH): AgentConfig {
 export function saveConfig(cfg: AgentConfig, path: string = DEFAULT_PATH): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  // mode só vale na criação; garante 0600 mesmo se o arquivo já existia mais aberto
+  chmodSync(path, 0o600);
 }
