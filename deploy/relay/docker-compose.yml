@@ -3,6 +3,12 @@
 #   docker compose up -d --build
 # Comandos de administração (registrar máquina, backup etc.):
 #   docker compose exec relay node dist/cli.js machine add <hostname/usuario>
+#
+# Diretório de dados: o relay roda como o usuário `node` (uid 1000) e grava em ./data (banco, certificado,
+# backups). O ./data vem no repositório (.gitkeep) com o dono de quem clonou. Se ele tiver sido criado como root
+# (por exemplo, pelo próprio Docker ao subir sem a pasta), o relay recusa subir com "não é gravável"; corrija com:
+#   sudo install -d -o 1000 -g 1000 data
+name: global-agents-relay
 services:
   relay:
     build:

@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync } from "node:fs";
+import { accessSync, constants, mkdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,20 @@ export function consoleLog(min: LogLevel): RelayLog {
 }
 
 /**
+ * Garante que `dir` existe e é gravável antes de abrir o banco. O caso típico é o primeiro deploy: o bind mount
+ * `./data:/data` criado pelo Docker como root, com o contêiner rodando como `node` (uid 1000).
+ */
+function assertWritableDataDir(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+  } catch {
+    const uid = process.getuid?.() ?? "atual";
+    throw new Error(`diretório de dados ${dir} não é gravável pelo usuário ${uid}; rode: sudo install -d -o 1000 -g 1000 <caminho no host>`);
+  }
+}
+
+/**
  * Sobe o relay: banco → certificado → HTTPS → hub dos agentes → bot do Discord → roteador → `listen`.
  * Se qualquer passo falhar, desfaz os anteriores e rejeita. `close()` encerra roteador → hub → servidor →
  * (drenagem da fila, até 5 s) → bot → banco e não deixa handles abertos. Tokens nunca vão para o log.
@@ -61,7 +75,7 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
   };
 
   try {
-    mkdirSync(cfg.dataDir, { recursive: true });
+    assertWritableDataDir(cfg.dataDir);
     const db = openDb(relayDbPath(cfg.dataDir));
     cleanup.push(() => { db.close(); });
 

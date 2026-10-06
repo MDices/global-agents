@@ -197,7 +197,9 @@ export interface Db {
 
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  // busy_timeout primeiro: o relay no ar e a CLI (`docker compose exec … machine add`) escrevem no mesmo arquivo;
+  // sem ele a segunda escrita falha na hora com "database is locked" em vez de esperar até 5 s pelo lock.
+  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 
   const get = (sql: string, ...p: SQLInputValue[]): Row | undefined =>
     db.prepare(sql).get(...p) as Row | undefined;

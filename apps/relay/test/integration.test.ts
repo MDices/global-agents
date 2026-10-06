@@ -1,7 +1,7 @@
 import { createHook } from "node:async_hooks";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newEnvelope, serialize, type AgentEvent } from "@global-agents/protocol";
@@ -170,4 +170,24 @@ describe("startRelay com agente falso", () => {
       await a.close();
     }
   });
+
+  const asRoot = process.getuid?.() === 0;
+  it.skipIf(asRoot || process.platform === "win32")(
+    "diretório de dados sem permissão de escrita falha com mensagem que diz como corrigir",
+    async () => {
+      const ro = join(dataDir, "somente-leitura");
+      mkdirSync(ro);
+      chmodSync(ro, 0o500);
+      try {
+        track();
+        const uid = process.getuid?.() ?? 0;
+        await expect(startRelay({ ...cfg(), dataDir: ro }, deps())).rejects.toThrow(
+          `diretório de dados ${ro} não é gravável pelo usuário ${uid}; rode: sudo install -d -o 1000 -g 1000 <caminho no host>`,
+        );
+        await expectNoLeaks();
+      } finally {
+        chmodSync(ro, 0o700);
+      }
+    },
+  );
 });

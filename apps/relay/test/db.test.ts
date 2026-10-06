@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { MachineExistsError, hashToken, openDb } from "../src/db.js";
 
@@ -116,5 +120,45 @@ describe("pendingCommands", () => {
     expect(removed.map((c) => c.commandId)).toEqual(["old"]);
     expect(removed[0]?.discordMessageId).toBe("dm");
     expect(db.pendingCommands.listDue("m/u").map((c) => c.commandId)).toEqual(["new"]);
+  });
+});
+
+describe("concorrência entre conexões (relay no ar + CLI via docker compose exec)", () => {
+  it("a segunda escrita espera o lock da outra conexão (busy_timeout) em vez de falhar com database is locked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ga-db-lock-"));
+    const file = join(dir, "relay.db");
+    try {
+      openDb(file).close(); // cria o schema
+      // Outra conexão (em outra thread, como o relay seria outro processo) segura um lock de escrita por ~200 ms.
+      const holder = new Worker(
+        `const { DatabaseSync } = require("node:sqlite");
+         const { parentPort, workerData } = require("node:worker_threads");
+         const db = new DatabaseSync(workerData);
+         db.exec("BEGIN IMMEDIATE");
+         db.prepare("INSERT INTO machines (name, token_hash) VALUES ('outra/maquina', 'h-outra')").run();
+         parentPort.postMessage("locked");
+         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+         db.exec("COMMIT");
+         db.close();`,
+        { eval: true, workerData: file },
+      );
+      const exited = new Promise<number>((resolve) => { holder.once("exit", resolve); });
+      await new Promise<void>((resolve, reject) => {
+        holder.once("message", () => { resolve(); });
+        holder.once("error", reject);
+      });
+      const db = openDb(file);
+      const t0 = Date.now();
+      try {
+        db.machines.upsert({ name: "fedora/leonardo", tokenHash: "h" });
+        expect(Date.now() - t0).toBeGreaterThanOrEqual(100);
+        expect(db.machines.list().map((m) => m.name).sort()).toEqual(["fedora/leonardo", "outra/maquina"]);
+      } finally {
+        db.close();
+      }
+      expect(await exited).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
