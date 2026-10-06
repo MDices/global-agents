@@ -1,17 +1,19 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Passthrough de node:net que conta conexões e, quando `hang` está ligado, devolve um socket que nunca conecta.
-const netCtl = vi.hoisted(() => ({ connects: 0, hang: false }));
+// Guarda o último socket de cliente criado, para o teste de que ele é destruído ao fim.
+const netCtl = vi.hoisted(() => ({ connects: 0, hang: false, last: undefined as import("node:net").Socket | undefined }));
 vi.mock("node:net", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:net")>();
   const connect = (...args: Parameters<typeof real.connect>): ReturnType<typeof real.connect> => {
     netCtl.connects++;
-    if (netCtl.hang) return new real.Socket();
-    return real.connect(...args);
+    const sock = netCtl.hang ? new real.Socket() : real.connect(...args);
+    netCtl.last = sock;
+    return sock;
   };
   return { ...real, connect, default: { ...real, connect } };
 });
@@ -102,15 +104,18 @@ describe("isWindowsPipe", () => {
 describe("injectPrompt", () => {
   let dir: string;
   let server: Server | undefined;
+  const serverSockets: Socket[] = [];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "ga-inject-"));
     netCtl.connects = 0;
     netCtl.hang = false;
+    netCtl.last = undefined;
   });
 
   afterEach(async () => {
     vi.useRealTimers();
+    for (const sock of serverSockets.splice(0)) sock.destroy(); // senão server.close() espera a conexão parada
     const s = server;
     server = undefined;
     if (s !== undefined) await new Promise<void>((r) => s.close(() => r()));
@@ -187,5 +192,29 @@ describe("injectPrompt", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
     expect(netCtl.connects).toBe(1);
+  });
+
+  it("depois de entregar, o socket do cliente fica destruído (sem fd meio-aberto)", async () => {
+    const { path, received } = await fakeInbox();
+    await injectPrompt({ messagingSocketPath: path }, "oi", { name: "x" });
+    expect(netCtl.last?.destroyed).toBe(true);
+    expect(parse((await received)).type).toBe("user");
+  });
+
+  it("par que aceita e nunca lê um payload de 4 MB → tempo esgotado (timeout curto injetado)", async () => {
+    // Mesmo caminho do timeout padrão de 5 s; o teste injeta 300 ms só para não ficar lento.
+    const path = join(dir, "surdo.sock");
+    const srv = createServer((sock) => {
+      sock.pause();
+      serverSockets.push(sock);
+    });
+    server = srv;
+    await new Promise<void>((r) => srv.listen(path, () => r()));
+    const t0 = Date.now();
+    await expect(
+      injectPrompt({ messagingSocketPath: path }, "x".repeat(4 * 1024 * 1024), { name: "x" }, { timeoutMs: 300 }),
+    ).rejects.toThrow("tempo esgotado");
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(netCtl.last?.destroyed).toBe(true);
   });
 });
