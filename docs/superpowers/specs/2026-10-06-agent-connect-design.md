@@ -213,7 +213,31 @@ merge. O planejador (esta sessão) só coordena, revisa e integra.
 2. **M2 Comandar**: `session.send`, `/novo`, `/parar`, fila offline. Entrega: criar e dirigir chats pelo Discord.
 3. **M3 Permissões**: hook `PermissionRequest` + cards com botões.
 4. **M4 Windows**: scripts `.ps1`, named pipe, WinSW, `doctor`; validação no Toneli-PC.
-5. **M5 Deploy**: Docker compose + Caddy na VPS, `systemd --user` no Linux, documentação de instalação.
+5. **M5 Deploy**: Docker compose na VPS atrás do Caddy **já existente**, `systemd --user` no Linux, documentação de
+   instalação.
+
+### 11.1 Ambiente real da VPS (levantado em 06/10/2026, leitura via SSH)
+
+A VPS (163.176.107.229, Oracle, Ubuntu 24.04, 2 vCPU, 11 GB RAM com 9,4 GB livres, 38 GB de disco livres) é a
+**produção do GestAI**: compose `~/gestai-infra` com ERPNext (frontend, backend, filas, MariaDB, Redis) e um
+container `caddy:2-alpine` que já ocupa 80/443 na rede `gestai-infra_frappe_network`, com `on_demand_tls` para
+`gestai.com.br, *.gestai.com.br` (11 subdomínios de clínicas com certificado). Firewall por iptables só libera 22,
+80 e 443. Sem Node no host; `sudo` sem senha; Docker 29 + Compose v5.
+
+Consequências para o relay:
+
+- **Não sobe outro proxy nem abre porta nova.** O relay roda num compose próprio (`~/agent-connect`) com rede própria
+  e o serviço `caddy` do gestai-infra ganha essa rede como `external`. No `Caddyfile` entra um bloco dedicado
+  `agent.gestai.com.br { reverse_proxy agent-connect-relay:8080 }` com certificado gerenciado normal (não
+  `on_demand`), que vence o curinga por ser host mais específico. Precisa de registro DNS A para
+  `agent.gestai.com.br` (ou outro nome que o Leonardo escolher) no Registro.br.
+- A única mudança em produção é essa: duas linhas no compose (rede externa) e um bloco no Caddyfile, aplicados com
+  `docker compose up -d caddy` + `caddy reload` (sem derrubar os sites). Fica como tarefa `O` com checklist de
+  rollback e janela combinada com o Leonardo.
+- O relay tem `restart: unless-stopped`, limite de memória (512 MB) e CPU (0.5) no compose para nunca competir com
+  o ERPNext; SQLite em volume próprio; logs com rotação.
+- Backup: o volume do SQLite entra no mesmo esquema de backup que `scripts/` do gestai-infra já usa (verificar no M5).
+
 
 ## 12. Riscos aceitos
 
