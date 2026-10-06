@@ -22,6 +22,10 @@ class FakeInventory extends EventEmitter {
   start = vi.fn();
   stop = vi.fn();
   find(id: string): SessionInfo | undefined { return this.list.find((s) => s.sessionId === id); }
+  waitFor(pred: (s: SessionInfo) => boolean): Promise<SessionInfo> {
+    const hit = this.list.find(pred);
+    return hit !== undefined ? Promise.resolve(hit) : Promise.reject(new Error("não apareceu"));
+  }
   set(list: SessionInfo[]): void { this.list = list; this.emit("changed", list); }
 }
 
@@ -152,12 +156,29 @@ describe("createAgent", () => {
     expect(client.sent[2]).toMatchObject({ sessionId: "s9" });
   });
 
-  it("comando recebido → command.error 'comandos ainda não suportados'", async () => {
-    const { client } = await setup();
+  it("comando recebido passa pelo handler: session.stop sem bgId → command.error de background", async () => {
+    const { client, inventory } = await setup();
+    inventory.set([SESSION]);
     const cmd: RelayCommand = { ...newEnvelope("relay/relay"), type: "session.stop", commandId: "c42", sessionId: "s1" };
     client.emit("command", cmd);
-    expect(client.sent.at(-1)).toMatchObject({ type: "command.error", commandId: "c42", reason: "comandos ainda não suportados" });
+    await vi.waitFor(() => { expect(client.sent.at(-1)).toMatchObject({ type: "command.error", commandId: "c42" }); });
+    expect(client.sent.at(-1)).toMatchObject({ reason: expect.stringContaining("background") as unknown });
     expect(AgentEventSchema.safeParse(client.sent.at(-1)).success).toBe(true);
+  });
+
+  it("session.send chega ao inject com o registro da sessão e o relay recebe ack (uma vez só para commandId repetido)", async () => {
+    const inject = vi.fn<NonNullable<AgentDeps["commands"]["inject"]>>(() => Promise.resolve());
+    const { client, inventory } = await setup({
+      commands: { inject, readRegistry: (pid) => ({ pid, sessionId: "s1", messagingSocketPath: "/run/x.sock" }) },
+    });
+    inventory.set([{ ...SESSION, pid: 77 }]);
+    const cmd: RelayCommand = { ...newEnvelope("relay/relay"), type: "session.send", commandId: "c7", sessionId: "s1", text: "oi" };
+    client.emit("command", cmd);
+    client.emit("command", cmd);
+    await vi.waitFor(() => { expect(client.sent.filter((e) => e.type === "command.ack")).toHaveLength(2); });
+    expect(client.sent.at(-1)).toMatchObject({ type: "command.ack", commandId: "c7" });
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith({ messagingSocketPath: "/run/x.sock" }, "oi", { name: "discord" });
   });
 
   it("reenvia hello só quando claudeAccount muda (checagem a cada 60 s)", async () => {

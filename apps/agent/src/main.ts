@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
 import { runClaude } from "./claude/exec.js";
+import { injectPrompt } from "./claude/inject.js";
 import { Inventory, type RunFn } from "./claude/inventory.js";
+import { readRegistry } from "./claude/registry.js";
+import { spawnSession, type SpawnRun } from "./claude/spawn.js";
+import { stopSession } from "./claude/stop.js";
+import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
 import type { AgentConfig } from "./config.js";
 import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
@@ -19,6 +24,7 @@ export interface InventoryLike {
   start(): void;
   stop(): void;
   find(sessionId: string): SessionInfo | undefined;
+  waitFor(pred: (s: SessionInfo) => boolean, timeoutMs: number): Promise<SessionInfo>;
   on<K extends keyof InventoryEvents>(event: K, fn: (...args: InventoryEvents[K]) => void): unknown;
   off<K extends keyof InventoryEvents>(event: K, fn: (...args: InventoryEvents[K]) => void): unknown;
 }
@@ -36,18 +42,18 @@ export interface AgentDeps {
   /** Fábrica: o cliente precisa do `hello` e do outbox montados aqui. */
   client: (opts: RelayClientOptions) => RelayClientLike;
   hookServer: typeof startHookServer;
-  /** Executa o `claude` (probes de versão e conta). */
-  run: RunFn;
+  /** Executa o `claude` (probes de versão e conta, `--bg`, `stop`). */
+  run: SpawnRun;
   /** Intervalo da re-checagem de `claudeAccount` (padrão 60 s). */
   accountCheckMs: number;
+  /** Substitui partes do despacho de comandos (testes; `onPermissionDecide` vem em T20). */
+  commands: Partial<Omit<CommandDeps, "machine" | "inventory">>;
 }
 
 export interface Agent {
   start(): Promise<void>;
   stop(): Promise<void>;
 }
-
-const UNSUPPORTED = "comandos ainda não suportados";
 
 function agentVersion(): string {
   try {
@@ -87,11 +93,21 @@ async function claudeAccount(run: RunFn): Promise<string | undefined> {
 
 export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Agent {
   const machine = machineId(cfg);
-  const run: RunFn = deps.run ?? ((args) => runClaude(args, { timeoutMs: 15000, claudeBin: cfg.claudeBin }));
+  const run: SpawnRun =
+    deps.run ?? ((args, opts) => runClaude(args, { timeoutMs: 15000, ...opts, claudeBin: cfg.claudeBin }));
   const inventory: InventoryLike = deps.inventory ?? new Inventory({ claudeBin: cfg.claudeBin });
   const makeClient = deps.client ?? ((opts: RelayClientOptions) => new RelayClient(opts));
   const hookServerFactory = deps.hookServer ?? startHookServer;
   const accountCheckMs = deps.accountCheckMs ?? 60_000;
+  const handleCommand = createCommandHandler({
+    machine,
+    inventory,
+    inject: injectPrompt,
+    spawn: (input) => spawnSession(input, { run, inventory }),
+    stop: (bgId) => stopSession(bgId, { run }),
+    readRegistry: (pid) => readRegistry(pid),
+    ...deps.commands,
+  });
   const version = agentVersion();
   const osUser = userInfo().username;
 
@@ -128,8 +144,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     console.warn(`global-agents: falha ao listar sessões do claude: ${msg}`);
   };
   const onCommand = (cmd: RelayCommand): void => {
-    // TODO(T15): handleCommand
-    client?.send({ ...newEnvelope(machine), type: "command.error", commandId: cmd.commandId, reason: UNSUPPORTED });
+    void handleCommand(cmd).then((ev) => client?.send(ev));
   };
 
   const recheckAccount = async (): Promise<void> => {
