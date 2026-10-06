@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { newEnvelope, type AgentEvent, type RelayCommand } from "@global-agents/protocol";
+import { newEnvelope, SLASH_ALLOWLIST, type AgentEvent, type RelayCommand } from "@global-agents/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommandBridge, EXPIRED_TEXT, COMMAND_TTL_MS, type CommandBridge } from "../src/commands.js";
 import { openDb, type Db } from "../src/db.js";
@@ -15,6 +15,7 @@ import {
   SLASH_COMMANDS,
   createSlashHandler,
   sessionName,
+  slashResultMessages,
   stripMention,
   type AutocompleteInteraction,
   type ButtonInteraction,
@@ -198,14 +199,20 @@ describe("stripMention", () => {
 });
 
 describe("SLASH_COMMANDS", () => {
-  it("define /novo, /sessoes, /parar e /filtro com as opções combinadas", () => {
-    expect(SLASH_COMMANDS.map((c) => c.name)).toEqual(["novo", "sessoes", "parar", "filtro"]);
+  it("define /novo, /sessoes, /parar, /filtro e /claude com as opções combinadas", () => {
+    expect(SLASH_COMMANDS.map((c) => c.name)).toEqual(["novo", "sessoes", "parar", "filtro", "claude"]);
     const novo = SLASH_COMMANDS[0];
     expect(novo?.options?.map((o) => o.name)).toEqual(["prompt", "projeto", "modo"]);
     expect(JSON.stringify(novo)).toContain("\"max_length\":4000");
     expect(JSON.stringify(novo)).toContain("\"autocomplete\":true");
     for (const mode of ["default", "acceptEdits", "plan", "bypassPermissions"]) expect(JSON.stringify(novo)).toContain(`"value":"${mode}"`);
     expect(SLASH_COMMANDS[3]?.options?.map((o) => o.name)).toEqual(["conta", "desligar", "ver"]);
+    const claude = SLASH_COMMANDS[4];
+    expect(claude?.options?.map((o) => o.name)).toEqual(["comando", "args"]);
+    const json = JSON.stringify(claude);
+    for (const c of SLASH_ALLOWLIST) expect(json).toContain(`"value":"${c}"`);
+    expect(json).not.toContain(`"value":"clear"`);
+    expect(json).toContain("\"max_length\":500");
   });
 });
 
@@ -527,6 +534,124 @@ describe("/parar", () => {
     await settle();
     slash.dispose();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("/claude", () => {
+  beforeEach(() => {
+    db.sessions.upsert({ sessionId: "s-bg", machine: M, name: "migracao-boletos-v2", threadId: "th-sessao", bgId: "bg1", state: "working", updatedAt: Date.now() });
+  });
+  const claude = (opts: Record<string, string>, over: Partial<CommandInteraction> = {}): FakeCommand =>
+    command("claude", opts, { channelId: "th-sessao", ...over });
+  const posts = (): string[] => port.of("post").filter((p) => p.targetId === "th-sessao").map((p) => p.text);
+
+  it("/claude comando:usage em thread mapeada → efêmero executando /usage… e session.slash", async () => {
+    const i = claude({ comando: "usage" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies).toEqual([{ view: { content: "executando /usage…" }, ephemeral: true }]);
+    expect(hub.sent.at(-1)?.machine).toBe(M);
+    const cmd = lastCmd();
+    expect(cmd).toMatchObject({ type: "session.slash", commandId: i.id, sessionId: "s-bg", command: "usage" });
+    expect("args" in cmd).toBe(false);
+  });
+
+  it("args vão aparados no comando", async () => {
+    const i = claude({ comando: "compact", args: "  foco em testes  " });
+    await slash.onInteraction(i);
+    expect(lastCmd()).toMatchObject({ type: "session.slash", command: "compact", args: "foco em testes" });
+  });
+
+  it("ack com tela de 3000 chars → 2 posts na thread em bloco de código, cada um ≤ 2000", async () => {
+    const i = claude({ comando: "context" });
+    await slash.onInteraction(i);
+    const screen = Array.from({ length: 100 }, (_v, n) => `linha ${String(n).padStart(3, "0")} ${"x".repeat(19)}`).join("\n");
+    expect(screen.length).toBeGreaterThanOrEqual(2900);
+    await ackOf(i.id, { screen });
+    await settle();
+    const p = posts();
+    expect(p).toHaveLength(2);
+    expect(p[0]?.startsWith("🛠️ /context\n```\n")).toBe(true);
+    for (const m of p) {
+      expect(m.length).toBeLessThanOrEqual(2000);
+      expect(m).toMatch(/```\n[\s\S]*\n```/);
+      expect(m.match(/```/g)).toHaveLength(2);
+    }
+    expect(p[0]).toContain("linha 000");
+    expect(p[1]).toContain("linha 099");
+    expect(p[1]).toMatch(/```\n-# \(parte 2\/2\)$/);
+  });
+
+  it("ack com tela curta → um post com cabeçalho e bloco de código", async () => {
+    const i = claude({ comando: "status" });
+    await slash.onInteraction(i);
+    await ackOf(i.id, { screen: "Version: 2.1.292" });
+    await settle();
+    expect(posts()).toEqual(["🛠️ /status\n```\nVersion: 2.1.292\n```"]);
+    expect(i.edits).toEqual([{ content: "✅ /status concluído; resultado na thread" }]);
+  });
+
+  it("ack sem screen → ❌ no efêmero, nada na thread", async () => {
+    const i = claude({ comando: "status" });
+    await slash.onInteraction(i);
+    await ackOf(i.id, {});
+    await settle();
+    expect(posts()).toEqual([]);
+    expect(i.edits.at(-1)?.content).toMatch(/^❌/);
+  });
+
+  it("erro do agente → ❌ razão", async () => {
+    const i = claude({ comando: "compact" });
+    await slash.onInteraction(i);
+    await errOf(i.id, "sessão ocupada; tente quando o turno terminar");
+    await settle();
+    expect(i.edits).toEqual([{ content: "❌ sessão ocupada; tente quando o turno terminar" }]);
+    expect(posts()).toEqual([]);
+  });
+
+  it("fora de thread mapeada → efêmero, nada enviado", async () => {
+    const i = command("claude", { comando: "usage" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies).toEqual([{ view: { content: NOT_SESSION_THREAD_TEXT }, ephemeral: true }]);
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("usuário fora da allowlist → sem permissão", async () => {
+    const i = claude({ comando: "usage" }, { user: { id: STRANGER, username: "x" } });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies).toEqual([{ view: { content: NOT_ALLOWED_TEXT }, ephemeral: true }]);
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("comando fora da allowlist ou args com quebra de linha/mais de 500 chars → recusado, nada enviado", async () => {
+    for (const opts of [{ comando: "clear" }, { comando: "compact", args: "a\nb" }, { comando: "compact", args: "a".repeat(501) }]) {
+      const i = claude(opts);
+      await slash.onInteraction(i);
+      await settle();
+      expect(i.replies).toHaveLength(1);
+      expect(i.replies[0]?.ephemeral).toBe(true);
+      expect(i.replies[0]?.view.content).toMatch(/^❌/);
+    }
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("máquina offline → fila e aviso", async () => {
+    hub.online.delete(M);
+    const i = claude({ comando: "usage" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(db.pendingCommands.listDue(M).map((r) => r.commandId)).toEqual([i.id]);
+    expect(i.edits).toEqual([{ content: OFFLINE_TEXT }]);
+  });
+});
+
+describe("slashResultMessages", () => {
+  it("cercas dentro da tela não quebram o bloco de código", () => {
+    const [m] = slashResultMessages("hooks", "antes\n```js\ncodigo\n```\ndepois");
+    expect(m?.match(/```/g)).toHaveLength(2);
+    expect(m).toContain("codigo");
   });
 });
 

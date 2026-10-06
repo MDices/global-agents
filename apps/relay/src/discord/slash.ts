@@ -2,12 +2,15 @@ import {
   ApplicationCommandOptionType,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
-import { newEnvelope, PermissionModeSchema, type PermissionMode, type RelayCommand } from "@global-agents/protocol";
+import {
+  newEnvelope, PermissionModeSchema, SLASH_ALLOWLIST, SlashCommandNameSchema, type PermissionMode, type RelayCommand,
+} from "@global-agents/protocol";
 import { z } from "zod";
 import type { CommandBridge, CommandCallbacks, SubmitResult } from "../commands.js";
 import type { Db, Machine } from "../db.js";
 import { isSilenced, type Router } from "../router.js";
 import type { DiscordPort, EmbedSpec } from "./bot.js";
+import { chunkText } from "./chunk.js";
 import { parseState, STATE_EMOJI, truncate, type ThreadRegistry } from "./threads.js";
 
 export const NOT_ALLOWED_TEXT = "sem permissão";
@@ -31,6 +34,20 @@ const CHOICE_MAX = 100;
 const PROMPT_MAX = 4000;
 const NAME_WORDS = 6;
 const NAME_MAX = 60;
+/** Limite de `args` do `/claude` (o mesmo do protocolo). */
+const SLASH_ARGS_MAX = 500;
+/** Fatia da tela por mensagem: cabeçalho `🛠️ /<comando>` + 2 cercas + sufixo de parte cabem em 2000. */
+const SCREEN_CHUNK = 1900;
+const FENCE = "```";
+const CLAUDE_HINT: Record<(typeof SLASH_ALLOWLIST)[number], string> = {
+  compact: "resume a conversa (args: instruções de foco)",
+  usage: "uso do plano",
+  cost: "custo da sessão",
+  hooks: "hooks configurados",
+  status: "versão, modelo e conta",
+  context: "uso do contexto",
+  model: "modelo atual (args: alias para trocar)",
+};
 const MODE_HINT: Record<PermissionMode, string> = {
   default: "pede permissão para tudo",
   acceptEdits: "edita arquivos sem perguntar",
@@ -68,6 +85,17 @@ export const SLASH_COMMANDS: RESTPostAPIChatInputApplicationCommandsJSONBody[] =
       },
       { type: ApplicationCommandOptionType.Subcommand, name: "desligar", description: "Mostra sessões de qualquer conta" },
       { type: ApplicationCommandOptionType.Subcommand, name: "ver", description: "Mostra o estado do filtro" },
+    ],
+  },
+  {
+    name: "claude",
+    description: "Roda um comando do Claude Code na sessão desta thread (só sessões em background)",
+    options: [
+      {
+        type: ApplicationCommandOptionType.String, name: "comando", description: "Comando do Claude Code", required: true,
+        choices: SLASH_ALLOWLIST.map((c) => ({ name: `/${c} · ${CLAUDE_HINT[c]}`, value: c })),
+      },
+      { type: ApplicationCommandOptionType.String, name: "args", description: "Argumentos do comando (opcional)", max_length: SLASH_ARGS_MAX },
     ],
   },
 ];
@@ -146,7 +174,7 @@ export interface SlashDeps {
   threads: Pick<ThreadRegistry, "ensureThread">;
   bridge: Pick<CommandBridge, "submit">;
   router: Pick<Router, "projectsOf" | "refreshTopic">;
-  port: Pick<DiscordPort, "reply">;
+  port: Pick<DiscordPort, "reply" | "post">;
   /** Só estes usuários usam os comandos (nunca o canal decide). */
   allowedUserIds: readonly string[];
   /** `machine` do envelope dos comandos que saem do relay. */
@@ -194,6 +222,21 @@ function ago(ts: number, now: number): string {
 const escapeMd = (s: string): string => s.replace(/([\\*_~`|>])/g, "\\$1");
 const text = (s: string): SlashView => ({ content: truncate(s, CONTENT_MAX) });
 const failure = (reason: string): string => truncate(`❌ ${reason}`, CONTENT_MAX);
+
+/**
+ * Mensagens da thread com o resultado de um `/claude`: `🛠️ /<comando>` e a tela em blocos de código (≤ 2000 cada).
+ * Crases triplas da tela ganham um espaço de largura zero para não fechar o bloco.
+ */
+export function slashResultMessages(command: string, screen: string): string[] {
+  const safe = screen.replace(/`{3,}/g, (m) => m.split("").join("\u200b"));
+  return chunkText(safe, SCREEN_CHUNK).map((chunk, i) => {
+    const part = /\n-# \(parte \d+\/\d+\)$/.exec(chunk);
+    const body = part === null ? chunk : chunk.slice(0, part.index);
+    return `${i === 0 ? `🛠️ /${command}\n` : ""}${FENCE}\n${body}\n${FENCE}${part?.[0] ?? ""}`;
+  });
+}
+
+const ScreenSchema = z.object({ screen: z.string() });
 
 const CreatedSchema = z.object({ sessionId: z.string().min(1), bgId: z.string().min(1).optional() });
 
@@ -402,6 +445,47 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     }), show);
   };
 
+  const onClaude = (i: CommandInteraction): void => {
+    const session = db.sessions.getByThread(i.channelId);
+    if (session === undefined) {
+      reply(i, text(NOT_SESSION_THREAD_TEXT));
+      return;
+    }
+    const raw = i.options.getString("comando") ?? "";
+    const parsed = SlashCommandNameSchema.safeParse(raw);
+    if (!parsed.success) {
+      reply(i, text(failure(`comando não permitido: /${raw}; use um de ${SLASH_ALLOWLIST.map((c) => `/${c}`).join(", ")}`)));
+      return;
+    }
+    const command = parsed.data;
+    const args = (i.options.getString("args") ?? "").trim();
+    if (/[\r\n]/.test(args) || args.length > SLASH_ARGS_MAX) {
+      reply(i, text(failure(`args inválidos: uma linha só, até ${SLASH_ARGS_MAX} caracteres`)));
+      return;
+    }
+    reply(i, text(`executando /${command}…`));
+    const show: Show = (t) => { discord(i.id, "falha ao editar a resposta", () => i.editReply(text(t))); };
+    const threadId = i.channelId;
+    const cmd: RelayCommand = {
+      ...newEnvelope(relayMachine), type: "session.slash", commandId: i.id, sessionId: session.sessionId, command,
+      ...(args !== "" ? { args } : {}),
+    };
+    afterSubmit(deps.bridge.submit(session.machine, cmd, {
+      onAck(result) {
+        const r = ScreenSchema.safeParse(result ?? {});
+        if (!r.success) {
+          show(failure("a máquina não devolveu a tela do comando"));
+          return;
+        }
+        for (const m of slashResultMessages(command, r.data.screen)) {
+          discord(i.id, "falha ao postar o resultado", () => port.post(threadId, m));
+        }
+        show(`✅ /${command} concluído; resultado na thread`);
+      },
+      onError(reason) { show(failure(reason)); },
+    }), show);
+  };
+
   const onFiltro = (i: CommandInteraction): void => {
     const machine = machineOr(i);
     if (machine === undefined) return;
@@ -479,6 +563,7 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       case "sessoes": onSessoes(i); return;
       case "parar": onParar(i); return;
       case "filtro": onFiltro(i); return;
+      case "claude": onClaude(i); return;
       default: reply(i, text(`comando desconhecido: /${i.commandName}`));
     }
   };
