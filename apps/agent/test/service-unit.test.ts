@@ -33,10 +33,16 @@ describe("renderUnit", () => {
     expect(renderUnit("/o p/node", CLI)).toContain(`ExecStart="/o p/node" ${CLI} run`);
   });
 
+  it("config padrão não aparece; config customizada vira --config absoluto (com aspas se preciso)", () => {
+    expect(renderUnit(NODE, CLI)).toContain(`${CLI} run\n`);
+    expect(renderUnit(NODE, CLI, "/etc/ga/c.json")).toContain(`ExecStart=${NODE} ${CLI} run --config /etc/ga/c.json\n`);
+    expect(renderUnit(NODE, CLI, "/a b/c.json")).toContain(`run --config "/a b/c.json"\n`);
+  });
+
   it("o template estático em deploy/ é o mesmo texto da função", () => {
     const file = readFileSync(new URL("../../../deploy/agent/global-agents.service", import.meta.url), "utf8");
     expect(file).toBe(UNIT_TEMPLATE);
-    expect(file.replace("%NODE%", NODE).replace("%CLI%", CLI)).toBe(renderUnit(NODE, CLI));
+    expect(file.replace("%NODE%", NODE).replace("%CLI%", CLI).replace("%CONFIG%", "")).toBe(renderUnit(NODE, CLI));
   });
 });
 

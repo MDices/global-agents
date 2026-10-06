@@ -10,7 +10,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%NODE% %CLI% run
+ExecStart=%NODE% %CLI% run%CONFIG%
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
@@ -26,8 +26,11 @@ export function quoteExecArg(arg: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-export function renderUnit(node: string, cli: string): string {
-  return UNIT_TEMPLATE.replace("%NODE%", () => quoteExecArg(node)).replace("%CLI%", () => quoteExecArg(cli));
+/** `configPath` só entra na unidade quando não é o padrão (o chamador passa undefined nesse caso). */
+export function renderUnit(node: string, cli: string, configPath?: string): string {
+  const cfg = configPath === undefined ? "" : ` --config ${quoteExecArg(configPath)}`;
+  return UNIT_TEMPLATE.replace("%NODE%", () => quoteExecArg(node)).replace("%CLI%", () => quoteExecArg(cli))
+    .replace("%CONFIG%", () => cfg);
 }
 
 export function unitPath(env: NodeJS.ProcessEnv, home: string): string {
@@ -36,8 +39,8 @@ export function unitPath(env: NodeJS.ProcessEnv, home: string): string {
   return join(base, "systemd", "user", UNIT_NAME);
 }
 
-export function installUnit(path: string, node: string, cli: string): "written" | "unchanged" {
-  const text = renderUnit(node, cli);
+export function installUnit(path: string, node: string, cli: string, configPath?: string): "written" | "unchanged" {
+  const text = renderUnit(node, cli, configPath);
   if (existsSync(path) && readFileSync(path, "utf8") === text) return "unchanged";
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;

@@ -58,20 +58,21 @@ function configPath(a: Args): string {
   return resolve(one(a, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
-function installService(): void {
+function installService(configFile: string): void {
   if (process.platform !== "linux") {
     console.log("nota: --service só existe no Linux (systemd --user); nada foi feito nesta plataforma");
     return;
   }
   const cli = fileURLToPath(import.meta.url);
   const path = unitPath(process.env, homedir());
-  if (installUnit(path, process.execPath, cli) === "unchanged") console.log(`unidade já instalada em ${path}`);
+  const custom = configFile === resolve(DEFAULT_CONFIG_PATH) ? undefined : configFile;
+  if (installUnit(path, process.execPath, cli, custom) === "unchanged") console.log(`unidade já instalada em ${path}`);
   else console.log(`unidade gravada em ${path}`);
   console.log(`\npara ativar (não executei nada), rode:
   systemctl --user daemon-reload && systemctl --user enable --now global-agents
   loginctl enable-linger $USER
 
-o linger mantém o agente rodando e o inicia no boot mesmo sem uma sessão aberta.`);
+o linger mantém o agente rodando e o inicia no boot mesmo sem uma sessão aberta.\n\nse trocar a versão do Node, reexecute 'install --service' para atualizar o caminho do Node na unidade.`);
 }
 
 function uninstallService(): void {
@@ -115,7 +116,7 @@ function install(a: Args): void {
     console.log(`hooks em ${r.path}:`);
     for (const c of r.changes) console.log(`  - ${c}`);
   }
-  if (a.service) installService();
+  if (a.service) installService(path);
 }
 
 function uninstall(a: Args): void {
