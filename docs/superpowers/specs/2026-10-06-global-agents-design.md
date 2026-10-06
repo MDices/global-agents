@@ -154,6 +154,25 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
   → thread criada no `ack`. `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
 - Máquina conecta pela primeira vez → cria o canal `#<machine>` na categoria configurada.
 
+### 6.2.1 Comandos do Claude pela thread (`/claude`)
+
+Pedido do Leonardo (06/10): rodar slash commands do Claude Code (ex.: `/compact`, `/usage`) a partir do Discord. O
+socket de inbox entrega texto como "mensagem de outra sessão" e **não executa** slash commands, por desenho da
+Anthropic. Caminho escolhido: o agente abre a sessão com `claude attach <bgId>` num pseudoterminal, digita o comando,
+captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
+
+- Slash command do Discord: `/claude comando:<choice> [args:<texto>]`, só dentro de thread mapeada.
+- Allowlist fechada (v1): `compact` (args opcionais = instruções de foco), `usage`, `cost`, `hooks`, `status`,
+  `context`, `model` (args opcional = alias). Qualquer outro valor é recusado; `clear`, `exit`, `resume`,
+  `login`/`logout` e afins nunca entram.
+- Só funciona em sessões **em background** (têm `bgId`). Sessão interativa aberta num terminal → resposta
+  `essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg`.
+- Sessão com `status: busy` → recusa `sessão ocupada; tente quando o turno terminar` (exceto `usage`/`cost`/`status`,
+  que não mexem na conversa).
+- Resultado: texto da tela capturada, sem ANSI, postado na thread em bloco de código (fatiado pelo `chunkText`).
+- Protocolo: comando `session.slash { commandId, sessionId, command, args? }`; resposta `command.ack` com
+  `result.screen` ou `command.error`.
+
 ### 6.3 Segurança
 
 - Allowlist de Discord user IDs em config; qualquer outro remetente é ignorado em silêncio (gate no **autor**, não no
