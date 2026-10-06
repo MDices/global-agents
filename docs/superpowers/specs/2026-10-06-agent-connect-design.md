@@ -49,14 +49,15 @@ Três componentes, dois pacotes implantáveis mais um pacote compartilhado:
 
 ## 4. Contrato de eventos (`packages/protocol`)
 
-Uma linha JSON por mensagem. Todo envelope tem `v: 1`, `id` (uuid), `ts` (ISO 8601), `machine` (hostname
-normalizado). Eventos (agente → relay) e comandos (relay → agente):
+Uma linha JSON por mensagem. Todo envelope tem `v: 1`, `id` (uuid), `ts` (ISO 8601), `machine`
+(`hostname/usuario-do-SO`, normalizado). O agente é instalado e roda **por usuário do SO**; trocar o login Anthropic
+na mesma conta do SO não exige nada: hooks, settings, sockets e inventário são do usuário do SO. Eventos (agente → relay) e comandos (relay → agente):
 
 ### 4.1 Eventos
 
 | `type` | Campos | Origem |
 |---|---|---|
-| `agent.hello` | `version`, `os`, `claudeVersion`, `projects[]` (cwds sugeridos para `/novo`) | conexão |
+| `agent.hello` | `version`, `os`, `osUser`, `claudeVersion`, `claudeAccount` (e-mail de `claude auth status`), `projects[]` (cwds sugeridos para `/novo`) | conexão; reenviado quando a conta logada muda |
 | `session.list` | `sessions[]` com `sessionId`, `name`, `cwd`, `kind`, `status`, `state?`, `waitingFor?`, `bgId?` | `claude agents --json`, na conexão e a cada mudança (poll 5 s com diff) |
 | `session.status` | `sessionId`, `name`, `cwd`, `state` ∈ `working\|waiting\|done\|error`, `snippet?` | hooks `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd` |
 | `turn.prompt` | `sessionId`, `text`, `source` ∈ `terminal\|remote` | hook `UserPromptSubmit` (`source=remote` quando o texto começa com a tag de cross-session) |
@@ -130,7 +131,7 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 
 | Tabela | Colunas |
 |---|---|
-| `machines` | `name` PK, `token_hash`, `channel_id`, `last_seen`, `os`, `claude_version` |
+| `machines` | `name` PK (`hostname/usuario-do-SO`), `token_hash`, `channel_id`, `last_seen`, `os`, `claude_version`, `claude_account`, `filter_account` |
 | `sessions` | `session_id` PK, `machine`, `name`, `cwd`, `thread_id`, `bg_id`, `state`, `updated_at` |
 | `permissions` | `request_id` PK, `session_id`, `message_id`, `status`, `decided_by`, `decided_at` |
 | `pending_commands` | `command_id` PK, `machine`, `payload`, `created_at`, `expires_at`, `discord_message_id` |
@@ -138,7 +139,10 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 ### 6.2 Roteamento
 
 - Evento com `sessionId` sem thread → cria thread no canal da máquina (nome = `name` truncado a 100), grava mapa,
-  primeira mensagem: cwd, `claude attach <bgId>` quando houver, estado.
+  primeira mensagem: cwd, conta Anthropic logada na máquina naquele momento, `claude attach <bgId>` quando houver,
+  estado. **Sem filtro automático por conta**: todas as sessões da máquina aparecem, de qualquer conta logada
+  (decisão do Leonardo, 06/10). `/filtro conta:<e-mail>` é opcional e por canal, para silenciar threads de outras
+  contas enquanto ativo; `/filtro off` desliga.
 - `turn.prompt` → posta como citação `🧑 prompt` (ou `💬 via Discord` quando `source=remote`, sem repostar o texto).
 - `turn.reply` → fatia em ≤ 1900 chars preferindo quebras de parágrafo; posta em sequência; atualiza emoji de estado
   no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/30 s por thread.
