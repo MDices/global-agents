@@ -145,7 +145,8 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
   contas enquanto ativo; `/filtro off` desliga.
 - `turn.prompt` → posta como citação `🧑 prompt` (ou `💬 via Discord` quando `source=remote`, sem repostar o texto).
 - `turn.reply` → fatia em ≤ 1900 chars preferindo quebras de parágrafo; posta em sequência; atualiza emoji de estado
-  no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/30 s por thread.
+  no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/300 s por thread (o mesmo vale
+  para o tópico do canal): o Discord só aceita ~2 edições de nome/tópico por canal a cada 10 min.
 - `permission.request` → mensagem com embed (ferramenta, descrição, prévia em bloco de código até 1000 chars) e
   botões `Permitir` / `Negar`; clique → `permission.decide`; `permission.resolved` edita o card com o desfecho.
 - Mensagem humana numa thread mapeada → `session.send` → reação ✅ no ack, ❌ no erro, ⏳ se máquina offline
@@ -221,7 +222,7 @@ captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
 | `peerProtocol` ≠ 1 ou formato mudou | `fallback-pty.ts`; evento `agent.warning` visível na thread |
 | Timeout da permissão (30 min) | `deny`; card marca "expirou" |
 | Thread arquivada pelo Discord | Mensagem nova desarquiva automaticamente; relay não precisa agir |
-| Rate limit do Discord | Fila por canal com respeito a `Retry-After`; edições de nome de thread ≤ 1×/30 s |
+| Rate limit do Discord | Fila por canal com respeito a `Retry-After`; edições de nome de thread e tópico de canal ≤ 1×/300 s (limite do Discord: ~2 a cada 10 min) |
 
 ## 9. Testes
 

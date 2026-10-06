@@ -10,7 +10,7 @@ const STATE_LABEL: Record<SessionState, string> = {
   error: "🔴 erro",
 };
 const THREAD_NAME_MAX = 100;
-/** Intervalo mínimo entre duas edições do mesmo canal/thread (o Discord aceita ~2 a cada 10 min). */
+/** Intervalo mínimo (300 s) entre duas edições de nome/tópico do mesmo canal/thread (o Discord aceita ~2 a cada 10 min). */
 export const CHANNEL_EDIT_INTERVAL_MS = 300_000;
 
 /** Corta em `max` code units sem deixar meio par substituto no fim. */
@@ -126,7 +126,7 @@ export interface ThreadRegistryOptions {
 
 interface ThreadInfo {
   threadId: string;
-  /** Nome/estado desejados (o último pedido); aplicados no máximo 1×/30 s. */
+  /** Nome/estado desejados (o último pedido); aplicados no máximo 1×/300 s (`CHANNEL_EDIT_INTERVAL_MS`). */
   name: string;
   state: SessionState;
 }

@@ -32,7 +32,7 @@ Não é preciso administrador: a tarefa é do seu usuário e roda com privilégi
 
 - `node apps\agent\dist\cli.js status` mostra `agente: rodando`.
 - `node apps\agent\dist\cli.js doctor` sem ❌.
-- No Discord, a máquina aparece no canal/relay e `/claude status` responde.
+- No Discord, a máquina ganha um canal próprio e `/sessoes` (no canal da máquina) lista as sessões dela.
 - A tarefa registrada: `schtasks /Query /TN global-agents /XML` (confira `UserId` = seu usuário, `LeastPrivilege`, `ExecutionTimeLimit` `PT0S`) e `/V /FO LIST` para o status.
 - Log: o agente roda sem console visível; para depurar, rode `node apps\agent\dist\cli.js run` num terminal (pare a tarefa antes: `schtasks /End /TN global-agents`).
 
@@ -52,10 +52,10 @@ Marque e cole a saída/observações de volta no chat.
 - [ ] `install-windows.ps1` conclui; `schtasks /Query /TN global-agents /V /FO LIST` mostra o seu usuário (o mesmo de `whoami`) e o gatilho "Ao fazer logon" só para ele; o `/XML` mostra `PT0S`.
 - [ ] Instalou **sem** administrador, e ao iniciar a tarefa não aparece janela de console (o `node.exe` aparece no Gerenciador de Tarefas).
 - [ ] **Injeção via named pipe:** com uma sessão `claude --bg --name teste`, mande uma mensagem pelo Discord e confira no transcript que virou turno (o agente usa a linha de auth com `peerToken` do `.key`).
-- [ ] **`--bg` + `attach`:** criar sessão pelo Discord (`/claude new` ou equivalente), listar com `claude agents`, `claude attach <id>` abre e mostra a conversa.
-- [ ] **`/claude status`** responde no Discord com as sessões da máquina.
-- [ ] **Cartão de permissão:** uma sessão pede uma ferramenta que exige permissão; o cartão aparece no Discord; Aprovar/Negar chega à sessão.
-- [ ] **Reboot:** reiniciar o PC, fazer logon; sem abrir nada, `status` mostra o agente rodando e o `/claude status` responde.
+- [ ] **`--bg` + `attach`:** criar sessão pelo Discord com `/novo prompt:<pedido>` no canal da máquina, listar com `claude agents`, `claude attach <id>` abre e mostra a conversa.
+- [ ] **`/sessoes`** (no canal da máquina) lista as sessões da máquina, e **`/claude comando:status`** (dentro da thread de uma sessão) mostra a tela de status do Claude daquela sessão.
+- [ ] **Cartão de permissão:** uma sessão pede uma ferramenta que exige permissão; o cartão aparece no Discord; Permitir/Negar chega à sessão.
+- [ ] **Reboot:** reiniciar o PC, fazer logon; sem abrir nada, `status` mostra o agente rodando e o `/sessoes` responde no canal da máquina.
 - [ ] **Reinício em falha:** matar o `node.exe` do agente pelo Gerenciador de Tarefas e conferir se ele volta em até ~1 min. Se não voltar, anotar o resultado (a decisão sobre um laço de reinício fica para depois do teste).
 - [ ] **Remoção:** depois de `uninstall --service --apply`, conferir que não sobrou nenhum `node.exe` do agente.
 - [ ] **Azure AD:** em PC ingressado no Azure AD, conferir se `USERDOMAIN` = `AzureAD` é aceito no `UserId` da tarefa (`schtasks /Create` não deve falhar).

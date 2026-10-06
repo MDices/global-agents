@@ -30,13 +30,16 @@ A VPS já hospeda outro projeto que usa as portas 80/443 e tem o próprio Docker
 
 Todos os comandos abaixo são executados **na VPS** (`ssh ubuntu@<ip-da-vps>`), exceto o `rsync`.
 
-1. **Copiar o repositório** (da sua máquina), sem `node_modules`:
+1. **Copiar o repositório** (da sua máquina), só o código-fonte:
    ```bash
    ssh ubuntu@<ip-da-vps> 'mkdir -p ~/global-agents'
-   rsync -az --delete --exclude node_modules --exclude .git --exclude 'deploy/relay/.env' --exclude 'deploy/relay/data' \
+   rsync -az --delete --exclude .git --exclude node_modules --exclude dist --exclude .superpowers \
+     --exclude 'deploy/relay/data' --exclude 'deploy/relay/.env' \
      ./ ubuntu@<ip-da-vps>:~/global-agents/
    ```
-   (Alternativa: `git clone <url> ~/global-agents` na VPS.) Os excludes de `.env` e `data` protegem o segredo e o banco em atualizações futuras.
+   (Alternativa: `git clone <url> ~/global-agents` na VPS.) `.git`, `node_modules`, `dist` e `.superpowers` (anotações
+   locais de desenvolvimento) não vão para a VPS: a imagem é construída lá. Os excludes de `.env` e `data` protegem o
+   segredo e o banco em atualizações futuras (o `--delete` não os apaga).
 2. **Configurar o `.env` na VPS** (o token nunca passa pelo chat):
    ```bash
    cd ~/global-agents/deploy/relay
@@ -147,7 +150,7 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 | **401 / token recusado** | Token errado ou máquina não registrada. `machine list` na VPS; gere outro com `machine add <nome> --force` e rode `install` de novo no agente. |
 | **`EACCES` / "não é gravável" em `data`** | O `./data` foi criado como root. `sudo install -d -o 1000 -g 1000 data` (ou `sudo chown -R 1000:1000 data`) e `docker compose up -d`. |
 | **Porta 8443 não responde de fora** | Confira `sudo iptables -L INPUT --line-numbers -n` (a regra deve vir antes do REJECT) e a security list da Oracle. |
-| **Rate limit do Discord** | O relay enfileira por canal e respeita o `Retry-After`; as mensagens só demoram. Nome de thread muda no máximo 1× a cada 30 s. |
+| **Rate limit do Discord** | O relay enfileira por canal e respeita o `Retry-After`; as mensagens só demoram. Nome de thread e tópico do canal mudam no máximo 1× a cada 5 min (300 s): o Discord só aceita ~2 edições por canal a cada 10 min, então o emoji de estado pode demorar a acompanhar. |
 | **Thread arquivada** | Nada a fazer: uma mensagem nova desarquiva a thread automaticamente. |
 | **Injeção falhou** (❌ na mensagem) | A sessão morreu ou o socket sumiu; o relay sugere `/novo`. |
 | **Permissão sem resposta** | Após 30 min o card marca "expirou" e a permissão é negada. |
