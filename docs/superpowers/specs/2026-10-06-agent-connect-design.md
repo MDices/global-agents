@@ -200,7 +200,7 @@ de dificuldade que define o modelo:
 
 | Etiqueta | Modelo | Critério |
 |---|---|---|
-| `S` | Sonnet | Contrato claro, poucas decisões, testes unitários diretos: tipos/zod, fatiamento, SQLite, instalador, scripts de hook, config, CLI, compose/Caddy |
+| `S` | Sonnet | Contrato claro, poucas decisões, testes unitários diretos: tipos/zod, fatiamento, SQLite, instalador, scripts de hook, config, CLI, compose, TLS autoassinado |
 | `O` | Opus | Integração com comportamento externo não trivial ou concorrência: `inject.ts` (socket + pipe + fallback pty), `permissions/` (segurar HTTP com três saídas), `transport/` (outbox + reconexão), roteamento do bot com rate limit e fila, testes e2e com Claude real |
 
 Toda tarefa entrega com testes (TDD), passa pelo gate da seção 9, e tem revisão por um segundo subagente antes do
