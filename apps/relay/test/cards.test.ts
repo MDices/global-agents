@@ -5,6 +5,8 @@ import { openDb, type Db } from "../src/db.js";
 import type { CardSpec } from "../src/discord/bot.js";
 import {
   ALREADY_DECIDED_TEXT,
+  EXPIRY_GRACE_MS,
+  SWEEP_INTERVAL_MS,
   OFFLINE_DECIDE_TEXT,
   PREVIEW_MAX,
   buildPermissionCard,
@@ -179,6 +181,9 @@ describe("buildPermissionCard", () => {
     const terminal = buildPermissionCard(request(), { by: "terminal", at });
     expect(terminal.embed.description).toContain("🖥️ decidido no terminal");
     expect(terminal.embed.color).toBe(0x99aab5);
+    const noBehavior = buildPermissionCard(request(), { by: "remote", who: ALLOWED, at });
+    expect(noBehavior.embed.description).toContain(`⛔ negado por <@${ALLOWED}>`);
+    expect(noBehavior.embed.color).toBe(0xed4245);
     const timeout = buildPermissionCard(request(), { by: "timeout", behavior: "deny", at });
     expect(timeout.embed.description).toContain("⏳ expirou (negado automaticamente)");
     expect(timeout.embed.color).toBe(0xed4245);
@@ -337,5 +342,85 @@ describe("fluxo de permissão", () => {
     expect(call).toMatchObject({ threadId: "th-antiga", messageId: "msg-antiga" });
     expect(call?.card.embed.description).toContain("⏳ expirou (negado automaticamente)");
     expect(call?.card.buttons).toEqual([]);
+  });
+});
+
+describe("endurecimento", () => {
+  const OTHER = "outra/maquina";
+  const fromOther = <T extends AgentEvent>(e: T): T => ({ ...e, machine: OTHER });
+
+  it("permission.request de outra máquina para a sessão é ignorado, sem thread nem card", async () => {
+    hub.emit("event", OTHER, fromOther(request()));
+    await settle();
+    expect(port.of("postCard")).toEqual([]);
+    expect(port.of("createThread")).toEqual([]);
+    expect(db.permissions.get(REQ)).toBeUndefined();
+  });
+
+  it("permission.resolved de outra máquina não resolve nem edita o card", async () => {
+    await requestPosted();
+    hub.emit("event", OTHER, fromOther(ev("permission.resolved", { requestId: REQ, by: "terminal" })));
+    await settle();
+    expect(port.of("editCard")).toEqual([]);
+    expect(db.permissions.get(REQ)?.status).toBe("pending");
+  });
+
+  it("command.error de outra máquina não mexe no card", async () => {
+    await requestPosted();
+    await click(`perm:allow:${REQ}`);
+    flow.onCommandResult(OTHER, { ...newEnvelope(OTHER), type: "command.error", commandId: `perm-${REQ}-allow`, reason: "x" });
+    await flow.idle();
+    expect(port.of("editCard")).toEqual([]);
+  });
+
+  it("filtro de conta ligado depois do card não derruba o permission.resolved", async () => {
+    await requestPosted();
+    db.machines.setFilterAccount(M, "outra@conta.com");
+    hub.emit("event", M, ev("permission.resolved", { requestId: REQ, by: "terminal" }));
+    await settle();
+    expect(lastEdit().embed.description).toContain("🖥️ decidido no terminal");
+  });
+
+  it("remote sem behavior é gravado como negado", async () => {
+    await requestPosted();
+    hub.emit("event", M, ev("permission.resolved", { requestId: REQ, by: "remote" }));
+    await settle();
+    expect(lastEdit().embed.description).toContain("⛔ negado");
+    expect(db.permissions.get(REQ)?.status).toBe("denied");
+  });
+
+  it("varredura: pendente vencido há mais de 2 min vira expirado no card e no banco", async () => {
+    flow.start();
+    await requestPosted();
+    await vi.advanceTimersByTimeAsync(EXPIRES.getTime() - NOW.getTime() + EXPIRY_GRACE_MS - SWEEP_INTERVAL_MS);
+    await flow.idle();
+    expect(port.of("editCard")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2 * SWEEP_INTERVAL_MS); // o tick em 31 min ainda não passou da folga (estrito); o de 32 min expira
+    await flow.idle();
+    expect(port.of("editCard")).toHaveLength(1);
+    expect(lastEdit().embed.description).toContain("⏳ expirou (negado automaticamente)");
+    expect(lastEdit().buttons).toEqual([]);
+    expect(db.permissions.get(REQ)?.status).toBe("expired");
+    // um desfecho atrasado depois da varredura não edita de novo
+    hub.emit("event", M, ev("permission.resolved", { requestId: REQ, by: "timeout" }));
+    await settle();
+    expect(port.of("editCard")).toHaveLength(1);
+  });
+
+  it("varredura sob demanda (reconexão) também expira; pedido ainda válido fica", async () => {
+    await requestPosted();
+    await flow.sweep();
+    await flow.idle();
+    expect(port.of("editCard")).toEqual([]);
+    vi.setSystemTime(EXPIRES.getTime() + EXPIRY_GRACE_MS + 1);
+    await flow.sweep();
+    await flow.idle();
+    expect(db.permissions.get(REQ)?.status).toBe("expired");
+  });
+
+  it("dispose desliga o loop da varredura", async () => {
+    flow.start();
+    flow.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

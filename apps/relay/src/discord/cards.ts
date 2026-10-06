@@ -20,8 +20,10 @@ const GREY = 0x99aab5;
 const TITLE_MAX = 256;
 const DESCRIPTION_MAX = 3500;
 const FENCE = "```";
-/** Quanto um pedido sem desfecho fica na memória depois de expirar (a máquina pode ter sumido sem avisar). */
-const FORGET_AFTER_MS = 10 * 60_000;
+/** Folga depois de `expiresAt` antes de o relay dar o pedido por expirado sozinho (o agente pode ter sumido). */
+export const EXPIRY_GRACE_MS = 2 * 60_000;
+/** Intervalo da varredura de pedidos vencidos. */
+export const SWEEP_INTERVAL_MS = 60_000;
 
 /** O que o card mostra do pedido; sem `tool`, o card é o mínimo (pedido de antes de um reinício do relay). */
 export interface CardRequest {
@@ -51,9 +53,10 @@ function outcomeLine(o: CardOutcome): { line: string; color: number } {
     case "timeout": return { line: "⏳ expirou (negado automaticamente)", color: RED };
     case "remote": {
       const who = o.who === undefined ? "" : ` por <@${o.who}>`;
-      return o.behavior === "deny"
-        ? { line: `⛔ negado${who} às ${hhmm(o.at)} via Discord`, color: RED }
-        : { line: `✅ permitido${who} às ${hhmm(o.at)} via Discord`, color: GREEN };
+      // Sem `behavior`, o lado seguro: negado.
+      return o.behavior === "allow"
+        ? { line: `✅ permitido${who} às ${hhmm(o.at)} via Discord`, color: GREEN }
+        : { line: `⛔ negado${who} às ${hhmm(o.at)} via Discord`, color: RED };
     }
   }
 }
@@ -97,12 +100,19 @@ export interface PermissionFlowDeps {
 }
 
 export interface PermissionFlow {
-  /** Posta o card na thread `threadId` e grava o pedido; pedido repetido é ignorado. Rejeita se o post falhar. */
-  onRequest(machine: string, ev: PermissionRequest, threadId: string): Promise<void>;
+  /**
+   * Posta o card na thread que `thread()` devolve e grava o pedido; pedido repetido, ou de sessão que o banco liga a
+   * outra máquina, é ignorado (sem criar thread). Rejeita se o post falhar.
+   */
+  onRequest(machine: string, ev: PermissionRequest, thread: () => Promise<string>): Promise<void>;
   /** Clique em `perm:allow:<id>`/`perm:deny:<id>`. */
   onButton(i: ButtonInteraction): Promise<void>;
-  /** Desfecho do agente: edita o card uma única vez; pedido desconhecido é ignorado. */
-  onResolved(ev: PermissionResolved): Promise<void>;
+  /** Desfecho do agente: edita o card uma única vez; pedido desconhecido ou de outra máquina é ignorado. */
+  onResolved(machine: string, ev: PermissionResolved): Promise<void>;
+  /** Dá por expirados os pedidos pendentes com `expiresAt + 2 min` no passado (o loop chama a cada 60 s). */
+  sweep(): Promise<void>;
+  /** Liga o loop da varredura. */
+  start(): void;
   /** `command.error` de um `permission.decide` (commandId `perm-…`); o resto é ignorado. */
   onCommandResult(machine: string, ev: AgentEvent): void;
   /** Resolve quando as chamadas ao Discord já disparadas terminaram. */
@@ -126,7 +136,11 @@ interface Known {
  *   offline: o hook não espera 1 h) e o card vira `⏳ decidindo…` (botões desligados).
  * - `command.error` desse comando: o card volta a pendente com `⚠️ <razão>` e sem botões (o pedido sumiu no agente);
  *   a linha continua `pending` no banco, para um desfecho que ainda chegue editar o card.
- * - `permission.resolved`: `db.permissions.resolve` (só uma vez) e o card encolhe para o desfecho. Quem clicou fica só
+ * - `permission.request`/`permission.resolved` de uma máquina para sessão/pedido de outra são ignorados.
+ * - Varredura (60 s e na reconexão de uma máquina): pendente com `expiresAt + 2 min` no passado vira `expired` e o
+ *   card mostra a expiração (só pedidos na memória: depois de um reinício do relay o banco não sabe o `expiresAt`).
+ * - `permission.resolved`: `db.permissions.resolve` (só uma vez) e o card encolhe para o desfecho; `remote` sem
+ *   `behavior` conta como negado. Quem clicou fica só
  *   na memória até o desfecho; depois de um reinício do relay o card mínimo sai sem a ferramenta e sem o autor.
  * - As chamadas ao Discord de um mesmo pedido são feitas em série; falhas vão para `log`.
  */
@@ -150,23 +164,21 @@ export function createPermissionFlow(deps: PermissionFlowDeps): PermissionFlow {
     void next.then(() => { if (chains.get(key) === next) chains.delete(key); });
   };
 
-  const forgetExpired = (now: number): void => {
-    for (const [id, k] of known) {
-      if (k.expiresAt + FORGET_AFTER_MS < now) {
-        known.delete(id);
-        deciding.delete(id);
-      }
-    }
-  };
+  let timer: NodeJS.Timeout | undefined;
 
   const view = (card: CardSpec): SlashView => ({ embeds: [card.embed], buttons: card.buttons });
   const reply = (i: ButtonInteraction, text: string): void => {
     discord(i.id, "falha ao responder", () => i.reply({ content: text }, true));
   };
 
-  const onRequest = async (machine: string, ev: PermissionRequest, threadId: string): Promise<void> => {
-    forgetExpired(Date.now());
+  const onRequest = async (machine: string, ev: PermissionRequest, thread: () => Promise<string>): Promise<void> => {
     if (db.permissions.get(ev.requestId) !== undefined) return;
+    const owner = db.sessions.get(ev.sessionId)?.machine;
+    if (owner !== undefined && owner !== machine) {
+      log(`${machine}: permission.request de sessão de outra máquina (${owner}); ignorado`);
+      return;
+    }
+    const threadId = await thread();
     const card = buildPermissionCard(ev, "pending");
     const mentions = [...allowed];
     const { messageId } = await port.postCard(threadId, {
@@ -211,11 +223,16 @@ export function createPermissionFlow(deps: PermissionFlowDeps): PermissionFlow {
     discord(requestId, "falha ao marcar decidindo", () => i.update(view(card)));
   };
 
-  const onResolved = (ev: PermissionResolved): void => {
+  const onResolved = (machine: string | undefined, ev: PermissionResolved): void => {
     const row = db.permissions.get(ev.requestId);
     if (row === undefined) return;
+    const owner = known.get(ev.requestId)?.machine ?? db.sessions.get(row.sessionId)?.machine;
+    if (machine !== undefined && owner !== undefined && owner !== machine) {
+      log(`${machine}: permission.resolved de pedido de outra máquina (${owner}); ignorado`);
+      return;
+    }
     const d = deciding.get(ev.requestId);
-    const status = ev.by === "terminal" ? "terminal" : ev.by === "timeout" ? "expired" : ev.behavior === "deny" ? "denied" : "allowed";
+    const status = ev.by === "terminal" ? "terminal" : ev.by === "timeout" ? "expired" : ev.behavior === "allow" ? "allowed" : "denied";
     const now = new Date();
     if (!db.permissions.resolve(ev.requestId, status, ev.by === "remote" ? (d?.userId ?? "discord") : ev.by, now.getTime())) return;
     const k = known.get(ev.requestId);
@@ -251,6 +268,18 @@ export function createPermissionFlow(deps: PermissionFlowDeps): PermissionFlow {
     discord(requestId, "falha ao editar o card", () => port.editCard(threadId, messageId, card));
   };
 
+  /** Pedido vencido sem desfecho (agente sumiu ou o resolved se perdeu): o relay o dá por expirado. */
+  const sweep = (): void => {
+    const now = Date.now();
+    for (const [requestId, k] of known) {
+      if (k.expiresAt + EXPIRY_GRACE_MS < now) {
+        onResolved(undefined, { ...newEnvelope(relayMachine), type: "permission.resolved", requestId, by: "timeout", behavior: "deny" });
+        known.delete(requestId); // já resolvido por outro caminho: só esquece
+        deciding.delete(requestId);
+      }
+    }
+  };
+
   const guard = (label: string, fn: () => void): Promise<void> => {
     try {
       fn();
@@ -263,12 +292,20 @@ export function createPermissionFlow(deps: PermissionFlowDeps): PermissionFlow {
   return {
     onRequest,
     onButton: (i) => guard(`interação ${i.id}`, () => { onButton(i); }),
-    onResolved: (ev) => guard(`permissão ${ev.requestId}`, () => { onResolved(ev); }),
+    onResolved: (machine, ev) => guard(`permissão ${ev.requestId}`, () => { onResolved(machine, ev); }),
+    sweep: () => guard("varredura de permissões", sweep),
+    start() {
+      if (timer !== undefined) return;
+      timer = setInterval(() => { void guard("varredura de permissões", sweep); }, SWEEP_INTERVAL_MS);
+      timer.unref();
+    },
     onCommandResult: (machine, ev) => { void guard(`${machine}: ${ev.type}`, () => { onCommandResult(machine, ev); }); },
     async idle() {
       while (chains.size > 0) await Promise.all(chains.values());
     },
     dispose() {
+      if (timer !== undefined) clearInterval(timer);
+      timer = undefined;
       known.clear();
       deciding.clear();
     },

@@ -134,10 +134,14 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
       if (ev.commandId.startsWith("perm-")) permissions.onCommandResult(machine, ev);
       else void bridge.onAck(machine, ev);
     };
-    const onMachineOnline = (machine: string): void => { void bridge.onMachineOnline(machine); };
+    const onMachineOnline = (machine: string): void => {
+      void bridge.onMachineOnline(machine);
+      void permissions.sweep();
+    };
     hub.on("event", onAgentEvent);
     hub.on("online", onMachineOnline);
     bridge.start();
+    permissions.start();
     cleanup.push(() => {
       slash.dispose();
       bridge.dispose();

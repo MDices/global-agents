@@ -216,7 +216,7 @@ export function createRouter(deps: RouterDeps): Router {
   // Na fila da máquina: a thread existe antes do card, e o desfecho nunca é tratado antes do card ter sido postado.
   const onPermissionRequest = async (machine: string, e: EventOf<"permission.request">): Promise<void> => {
     if (deps.permissions === undefined) return;
-    await deps.permissions.onRequest(machine, e, await threadFor(machine, e.sessionId));
+    await deps.permissions.onRequest(machine, e, () => threadFor(machine, e.sessionId));
   };
 
   const onTeamEvent = async (machine: string, e: EventOf<"team.event">): Promise<void> => {
@@ -225,8 +225,10 @@ export function createRouter(deps: RouterDeps): Router {
 
   const handle = (machine: string, e: AgentEvent): Promise<void> => {
     // Filtro de conta: nada de thread nem post para a máquina enquanto a conta dela for outra. O hello sempre passa
-    // (é ele que atualiza a conta); aviso sem sessão é da máquina, não de uma sessão, e também passa.
-    if (e.type !== "agent.hello" && !(e.type === "agent.warning" && e.sessionId === undefined) && isSilenced(db, machine)) {
+    // (é ele que atualiza a conta); aviso sem sessão é da máquina, não de uma sessão, e também passa. O desfecho de
+    // permissão passa: um card postado antes de o filtro ligar não pode ficar pendente para sempre.
+    const passes = e.type === "agent.hello" || e.type === "permission.resolved" || (e.type === "agent.warning" && e.sessionId === undefined);
+    if (!passes && isSilenced(db, machine)) {
       return Promise.resolve();
     }
     switch (e.type) {
@@ -239,7 +241,7 @@ export function createRouter(deps: RouterDeps): Router {
       case "team.update": return onTeamUpdate(machine, e);
       case "team.event": return onTeamEvent(machine, e);
       case "permission.request": return onPermissionRequest(machine, e);
-      case "permission.resolved": return deps.permissions?.onResolved(e) ?? Promise.resolve();
+      case "permission.resolved": return deps.permissions?.onResolved(machine, e) ?? Promise.resolve();
       default: return Promise.resolve(); // acks: ponte de comandos (commands.ts) e cards de permissão (main.ts)
     }
   };
