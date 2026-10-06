@@ -144,15 +144,24 @@ describe("runDoctor", () => {
     expect((await by(deps({ fetchHealth: () => Promise.resolve({ status: 200, body: "<html>", fingerprint: FP }) }), "relay alcançável")).ok).toBe(false);
   });
 
-  it("fingerprint: diferente falha com texto claro; sem pin é ok com nota", async () => {
+  it("fingerprint: diferente falha com texto claro; sem pin falha com a dica de reinstalar com --fingerprint", async () => {
     const other = deps({ fetchHealth: () => Promise.resolve({ status: 200, body: '{"ok":true}', fingerprint: "AA:BB" }) });
     const c = await by(other, "fingerprint");
     expect(c.ok).toBe(false);
     expect(c.detail).toContain("outro certificado");
     expect((await by(other, "relay alcançável")).ok).toBe(true);
     const unpinned = await by(deps({ loadConfig: () => cfg() }), "fingerprint");
-    expect(unpinned.ok).toBe(true);
+    expect(unpinned.ok).toBe(false);
     expect(unpinned.detail).toContain("não fixado");
+    expect(unpinned.detail).toContain("install");
+    expect(unpinned.detail).toContain("--fingerprint");
+    expect(unpinned.detail).toContain("fingerprint");
+    const unpinnedDown = await by(deps({ loadConfig: () => cfg(), fetchHealth: () => Promise.reject(new Error("self-signed certificate")) }), "fingerprint");
+    expect(unpinnedDown.ok).toBe(false);
+    expect(unpinnedDown.detail).toContain("--fingerprint");
+    const plain = await by(deps({ loadConfig: () => cfg({ relayUrl: "ws://10.0.0.1:8080/ws" }) }), "fingerprint");
+    expect(plain.ok).toBe(true);
+    expect(plain.detail).toContain("sem TLS");
   });
 
   it("fetchHealth recebe a URL https derivada e o fingerprint", async () => {

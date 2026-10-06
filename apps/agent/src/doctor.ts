@@ -184,8 +184,12 @@ export async function runDoctor(d: DoctorDeps): Promise<Check[]> {
     add("relay alcançável", false, msg(e));
   }
   const want = cfg.relayCertFingerprint;
-  if (health === undefined) add("fingerprint do relay", false, "relay inalcançável; não foi possível verificar");
-  else if (want === undefined) add("fingerprint do relay", true, "não fixado na config (certificado não verificado)");
+  // Sem pin, o cliente `wss://` verifica o certificado pela cadeia de CAs e nunca conecta a um relay autoassinado.
+  if (want === undefined && !cfg.relayUrl.startsWith("ws://")) {
+    add("fingerprint do relay", false, "não fixado na config: o agente não conecta a um relay com certificado autoassinado. "
+      + "Pegue o fingerprint na VPS (`docker compose exec relay node dist/cli.js fingerprint`) e rode de novo `install … --fingerprint <fp>`");
+  } else if (health === undefined) add("fingerprint do relay", false, "relay inalcançável; não foi possível verificar");
+  else if (want === undefined) add("fingerprint do relay", true, "relay sem TLS (ws://); fingerprint não se aplica");
   else if (health.fingerprint?.toUpperCase() === want.toUpperCase()) add("fingerprint do relay", true, "confere com o fixado");
   else add("fingerprint do relay", false, `o servidor apresentou outro certificado (esperado ${want}, recebido ${health.fingerprint ?? "nenhum"})`);
   return checks;
