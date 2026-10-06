@@ -332,13 +332,54 @@ describe("TeamTracker — liberação de estado", () => {
     expect([i.leads.size, i.seenLeads.size, i.mates.size, i.deferred.size]).toEqual([0, 0, 0, 0]);
   });
 
-  it("líder que some do inventário é esquecido (painel final emitido)", () => {
+  it("ausência real: 2 snapshots seguidos sem o líder ao longo de > 60 s → esquecido, painel final uma vez", () => {
     replay(tracker, BG.slice(0, 9));
     tracker.syncInventory([BG_LEAD]);
+    vi.advanceTimersByTime(2000);
+    const before = updates().length;
+    tracker.syncInventory([]);
+    expect(inner(tracker).leads.has(BG_LEAD)).toBe(true); // 1 snapshot: ainda não
+    vi.advanceTimersByTime(30_000);
+    tracker.syncInventory([]);
+    expect(inner(tracker).leads.has(BG_LEAD)).toBe(true); // 2 snapshots, mas só 30 s
+    vi.advanceTimersByTime(31_000);
     tracker.syncInventory([]);
     const i = inner(tracker);
     expect([i.leads.size, i.seenLeads.size, i.mates.size]).toEqual([0, 0, 0]);
+    expect(updates()).toHaveLength(before + 1);
     expect(updates().at(-1)).toMatchObject({ leadSessionId: BG_LEAD, members: [{ name: "alpha" }] });
+    tracker.syncInventory([]);
+    vi.advanceTimersByTime(120_000);
+    tracker.syncInventory([]);
+    expect(updates()).toHaveLength(before + 1);
+  });
+
+  it("muito tempo mas um só snapshot sem o líder não basta", () => {
+    replay(tracker, BG.slice(0, 9));
+    tracker.syncInventory([BG_LEAD]);
+    vi.advanceTimersByTime(300_000);
+    tracker.syncInventory([]);
+    expect(inner(tracker).leads.has(BG_LEAD)).toBe(true);
+  });
+
+  it("oscilação: snapshot sem o líder e depois com ele → nada esquecido; o próximo team.update mantém membros e tarefas", () => {
+    replay(tracker, BG.slice(0, 9));
+    tracker.syncInventory([BG_LEAD]);
+    vi.advanceTimersByTime(2000);
+    tracker.syncInventory([]);
+    vi.advanceTimersByTime(61_000);
+    tracker.syncInventory([BG_LEAD]); // voltou: zera o contador
+    vi.advanceTimersByTime(61_000);
+    tracker.syncInventory([]); // nova ausência começa do zero (1 snapshot)
+    expect(inner(tracker).leads.has(BG_LEAD)).toBe(true);
+    const before = updates().length;
+    replay(tracker, BG.slice(9, 10)); // TeammateIdle de alpha
+    vi.advanceTimersByTime(2000);
+    expect(updates()).toHaveLength(before + 1);
+    expect(updates().at(-1)).toMatchObject({
+      leadSessionId: BG_LEAD, members: [{ name: "alpha", state: "idle" }],
+      tasks: [{ id: "1", status: "completed", owner: "alpha" }, { id: "2", status: "pending" }],
+    });
   });
 
   it("sessão vista mas que ainda não entrou no inventário não é esquecida pelo poll", () => {

@@ -170,7 +170,7 @@ describe("createAgent", () => {
     expect(client.types()).toContain("turn.reply");
   });
 
-  it("líder some do inventário: o tracker descarrega o painel final na hora (syncInventory ligado)", async () => {
+  it("líder some do inventário (2 snapshots, > 60 s): o tracker descarrega o painel final na hora (syncInventory ligado)", async () => {
     const lead = "72a1377b-4d94-4bf5-921c-e6311d55f837";
     const { client, inventory, post } = await setup({ teamsDir: join(dir, "teams") });
     inventory.set([{ sessionId: lead, cwd: "/home/leonardo/dev/work/global-agents", name: "ga-team-fixture", kind: "background" }]);
@@ -178,6 +178,9 @@ describe("createAgent", () => {
     for (const l of lines.slice(0, 10)) await post(JSON.parse(l)); // até o TeammateIdle de alpha
     await vi.waitFor(() => { expect(client.sent.some((e) => e.type === "team.event" && e.kind === "teammate_idle")).toBe(true); });
     const before = client.sent.filter((e) => e.type === "team.update").length;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    inventory.set([]);
+    vi.setSystemTime(Date.now() + 61_000);
     inventory.set([]);
     expect(client.sent.filter((e) => e.type === "team.update")).toHaveLength(before + 1);
     expect(client.sent.filter((e) => e.type === "team.update").at(-1)).toMatchObject({ leadSessionId: lead, members: [{ name: "alpha", state: "idle" }] });

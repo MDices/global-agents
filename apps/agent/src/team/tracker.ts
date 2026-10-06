@@ -12,6 +12,10 @@ export const TEAMMATE_REPLY_MAX = 300;
 export const DEFERRED_MAX = 20;
 /** Validade dos payloads guardados. */
 export const DEFERRED_TTL_MS = 600_000;
+/** Líder ausente do inventário só é esquecido depois de tantos snapshots seguidos sem ele... */
+export const MISSING_SNAPSHOTS = 2;
+/** ...e de tanto tempo desde o primeiro snapshot sem ele (as duas condições). */
+export const MISSING_MS = 60_000;
 
 export interface TeamTimers {
   setTimeout(fn: () => void, ms: number): unknown;
@@ -84,7 +88,7 @@ function cut(text: string, max: number): string {
  *   membro sem sessão e uma só sessão sem nome). A fala de um `Stop` sem nome espera o nome chegar.
  * - O painel (`team.update`) só existe quando o líder tem teammate e pelo menos um membro; tarefas criadas antes
  *   disso são anunciadas na ativação. Emissão com debounce de 2 s; `SessionEnd` do líder (ou o líder sumir do
- *   inventário, `syncInventory`) descarrega na hora e esquece o time.
+ *   inventário por 2 snapshots seguidos e 60 s, `syncInventory`) descarrega o painel final e esquece o time.
  */
 export class TeamTracker {
   private readonly machine: string;
@@ -96,8 +100,10 @@ export class TeamTracker {
   private readonly leads = new Map<string, Lead>();
   private readonly mates = new Map<string, Teammate>();
   private readonly deferred = new Map<string, Deferred>();
-  /** Sessões do último `syncInventory` (só quem já esteve no inventário pode ser esquecido por sumir dele). */
-  private inventoried = new Set<string>();
+  /** Sessões que já estiveram no inventário (só elas podem ser esquecidas por sumir dele). */
+  private readonly inventoried = new Set<string>();
+  /** Sessões do inventário ausentes nos últimos snapshots: desde quando e em quantos seguidos. */
+  private readonly missing = new Map<string, { since: number; count: number }>();
   private readonly now: () => number;
   /** Sessões vistas como líder (hooks sem marca de teammate), candidatas ao prefixo do `team_name`. */
   private readonly seenLeads = new Set<string>();
@@ -111,7 +117,7 @@ export class TeamTracker {
     this.teamsDir = opts.teamsDir ?? join(homedir(), ".claude", "teams");
     this.debounceMs = opts.debounceMs ?? TEAM_UPDATE_DEBOUNCE_MS;
     this.timers = opts.timers ?? defaultTimers;
-    this.now = opts.now ?? Date.now;
+    this.now = opts.now ?? (() => Date.now());
   }
 
   /** Um payload de hook; `teammate` vem de `isTeammatePayload`. Nunca lança. */
@@ -137,18 +143,29 @@ export class TeamTracker {
 
   /**
    * Sessões vivas no inventário (a cada `changed`). Líder que estava no inventário e sumiu é esquecido como no
-   * `SessionEnd`; quem nunca apareceu nele (lag do poll) é mantido.
+   * `SessionEnd`, mas só depois de ausente em 2 snapshots seguidos e por 60 s (uma oscilação do poll não apaga o
+   * time); reaparecer zera a contagem. Quem nunca apareceu nele (lag do poll) é mantido.
    */
   syncInventory(sessionIds: readonly string[]): void {
     if (this.disposed) return;
-    const now = new Set(sessionIds);
+    const present = new Set(sessionIds);
+    const now = this.now();
     try {
-      for (const id of this.inventoried) if (!now.has(id)) this.forgetLead(id);
-      for (const id of now) this.notTeammate(id); // está no inventário: é sessão, não teammate
+      for (const id of present) {
+        this.inventoried.add(id);
+        this.missing.delete(id);
+        this.notTeammate(id); // está no inventário: é sessão, não teammate
+      }
+      for (const id of [...this.inventoried]) {
+        if (present.has(id)) continue;
+        const m = this.missing.get(id) ?? { since: now, count: 0 };
+        m.count += 1;
+        this.missing.set(id, m);
+        if (m.count >= MISSING_SNAPSHOTS && now - m.since >= MISSING_MS) this.forgetLead(id);
+      }
     } catch {
       // consumidor com erro: o poll do inventário segue
     }
-    this.inventoried = now;
   }
 
   dispose(): void {
@@ -211,6 +228,7 @@ export class TeamTracker {
     }
     this.seenLeads.delete(sid);
     this.inventoried.delete(sid);
+    this.missing.delete(sid);
     for (const [mateId, m] of this.mates) if (m.leadId === sid) this.mates.delete(mateId);
     if (this.lastActiveLead === sid) this.lastActiveLead = undefined;
   }
