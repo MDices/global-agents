@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process";
 import { cpSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,15 +10,18 @@ import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
 import { installUnit, uninstallUnit, unitPath } from "./service/systemd.js";
+import { runWindowsService, serviceBackend } from "./service/windows.js";
 
 const USAGE = `uso: global-agents <comando> [opções]
 
 comandos:
   install --relay <url> --token <token> [--fingerprint <fp>] [--project <dir>]... [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
-            --service (Linux) também grava a unidade systemd --user
-  uninstall [--service]
-            remove os hooks do Claude Code (a config é mantida); --service remove a unidade systemd
+            --service também grava a unidade systemd --user (Linux) ou mostra o comando do
+            Agendador de Tarefas ao logon (Windows; com --apply o schtasks é executado)
+  uninstall [--service] [--apply]
+            remove os hooks do Claude Code (a config é mantida); --service remove a unidade
+            systemd (Linux) ou a tarefa agendada (Windows)
   run       roda o agente em primeiro plano
   doctor    diagnostica o ambiente (claude, hooks, sockets, relay); sai 1 se algo falhar
   status    mostra a config (sem o token) e se o agente está rodando
@@ -29,6 +33,7 @@ class UsageError extends Error {}
 interface Args {
   flags: Map<string, string[]>;
   service: boolean;
+  apply: boolean;
 }
 
 const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--config"]);
@@ -36,16 +41,18 @@ const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--co
 function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string[]>();
   let service = false;
+  let apply = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i] ?? "";
     if (k === "--service") { service = true; continue; }
+    if (k === "--apply") { apply = true; continue; }
     if (!KNOWN.has(k)) throw new UsageError(`opção desconhecida: ${k}`);
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new UsageError(`a opção ${k} precisa de um valor`);
     flags.set(k, [...(flags.get(k) ?? []), v]);
     i++;
   }
-  return { flags, service };
+  return { flags, service, apply };
 }
 
 function one(a: Args, k: string): string | undefined {
@@ -58,12 +65,28 @@ function configPath(a: Args): string {
   return resolve(one(a, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
-function installService(configFile: string): void {
-  if (process.platform !== "linux") {
-    console.log("nota: --service só existe no Linux (systemd --user); nada foi feito nesta plataforma");
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((res, rej) => {
+    execFile(file, args, { windowsHide: true }, (err, stdout, stderr) => {
+      if (stdout.trim() !== "") console.log(stdout.trim());
+      if (err) rej(new Error(`${file} falhou: ${stderr.trim() || err.message}`));
+      else res();
+    });
+  });
+}
+
+async function installService(configFile: string, apply: boolean): Promise<void> {
+  const backend = serviceBackend(process.platform);
+  if (backend === "none") {
+    console.log("nota: --service só existe no Linux (systemd --user) e no Windows (Agendador de Tarefas); nada foi feito nesta plataforma");
     return;
   }
   const cli = fileURLToPath(import.meta.url);
+  if (backend === "schtasks") {
+    const custom = configFile === resolve(DEFAULT_CONFIG_PATH) ? undefined : configFile;
+    await runWindowsService({ action: "install", apply, node: process.execPath, cli, ...(custom !== undefined ? { config: custom } : {}), log: console.log, exec: execFileAsync });
+    return;
+  }
   const path = unitPath(process.env, homedir());
   const custom = configFile === resolve(DEFAULT_CONFIG_PATH) ? undefined : configFile;
   const r = installUnit(path, process.execPath, cli, custom);
@@ -76,9 +99,14 @@ function installService(configFile: string): void {
 o linger mantém o agente rodando e o inicia no boot mesmo sem uma sessão aberta.\n\nse trocar a versão do Node, reexecute 'install --service' para atualizar o caminho do Node na unidade.`);
 }
 
-function uninstallService(): void {
-  if (process.platform !== "linux") {
-    console.log("nota: --service só existe no Linux (systemd --user); nada foi feito nesta plataforma");
+async function uninstallService(apply: boolean): Promise<void> {
+  const backend = serviceBackend(process.platform);
+  if (backend === "none") {
+    console.log("nota: --service só existe no Linux (systemd --user) e no Windows (Agendador de Tarefas); nada foi feito nesta plataforma");
+    return;
+  }
+  if (backend === "schtasks") {
+    await runWindowsService({ action: "uninstall", apply, node: process.execPath, cli: fileURLToPath(import.meta.url), log: console.log, exec: execFileAsync });
     return;
   }
   const path = unitPath(process.env, homedir());
@@ -89,7 +117,7 @@ function uninstallService(): void {
   if (r !== "foreign") console.log("\npara parar e desativar, rode (a unidade já foi removida do disco):\n  systemctl --user disable --now global-agents && systemctl --user daemon-reload");
 }
 
-function install(a: Args): void {
+async function install(a: Args): Promise<void> {
   const relayUrl = one(a, "--relay");
   const token = one(a, "--token");
   if (relayUrl === undefined || token === undefined) throw new UsageError("install exige --relay e --token");
@@ -117,15 +145,15 @@ function install(a: Args): void {
     console.log(`hooks em ${r.path}:`);
     for (const c of r.changes) console.log(`  - ${c}`);
   }
-  if (a.service) installService(path);
+  if (a.service) await installService(path, a.apply);
 }
 
-function uninstall(a: Args): void {
+async function uninstall(a: Args): Promise<void> {
   const r = uninstallHooks();
   if (r.removed.length === 0) console.log("nenhum hook do global-agents encontrado");
   else console.log(`hooks removidos: ${r.removed.join(", ")}`);
   console.warn("aviso: crossSessionInbound foi mantido em ~/.claude/settings.json; remova manualmente se quiser");
-  if (a.service) uninstallService();
+  if (a.service) await uninstallService(a.apply);
 }
 
 async function run(a: Args): Promise<void> {
@@ -187,13 +215,14 @@ async function main(argv: string[]): Promise<number> {
   }
   const a = parseArgs(rest);
   if (a.service && cmd !== "install" && cmd !== "uninstall") throw new UsageError("--service só vale para install e uninstall");
+  if (a.apply && !a.service) throw new UsageError("--apply só vale junto com --service");
   switch (cmd) {
     case "install":
-      install(a);
+      await install(a);
       return 0;
     case "uninstall":
       if (a.flags.size > 0) throw new UsageError("uninstall só aceita --service");
-      uninstall(a);
+      await uninstall(a);
       return 0;
     case "run":
       await run(a);
