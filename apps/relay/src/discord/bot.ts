@@ -57,6 +57,10 @@ export interface DiscordPort {
   removeReaction(channelId: string, messageId: string, emoji: string): Promise<void>;
   /** Responde (reply do Discord) à mensagem `messageId`; se ela sumiu, posta sem a referência. */
   reply(channelId: string, messageId: string, text: string): Promise<{ messageId: string }>;
+  /** Fixa a mensagem `messageId` no canal/thread. */
+  pin(channelId: string, messageId: string): Promise<void>;
+  /** Troca o texto de uma mensagem do próprio bot. */
+  edit(channelId: string, messageId: string, text: string): Promise<void>;
 }
 
 export function createBot(
@@ -216,6 +220,16 @@ export class DiscordJsPort implements DiscordPort {
       reply: { messageReference: messageId, failIfNotExists: false },
       allowedMentions: NO_MENTIONS,
     });
+  }
+
+  async pin(channelId: string, messageId: string): Promise<void> {
+    const message = await this.message(channelId, messageId);
+    await message.pin();
+  }
+
+  async edit(channelId: string, messageId: string, text: string): Promise<void> {
+    const message = await this.message(channelId, messageId);
+    await message.edit({ content: text, allowedMentions: NO_MENTIONS });
   }
 
   private async message(channelId: string, messageId: string): Promise<Message> {

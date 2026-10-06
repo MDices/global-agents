@@ -9,7 +9,9 @@ export type FakeCall =
   | { op: "editChannelTopic"; channelId: string; topic: string }
   | { op: "react"; channelId: string; messageId: string; emoji: string }
   | { op: "removeReaction"; channelId: string; messageId: string; emoji: string }
-  | { op: "reply"; channelId: string; messageId: string; text: string };
+  | { op: "reply"; channelId: string; messageId: string; text: string }
+  | { op: "pin"; channelId: string; messageId: string }
+  | { op: "edit"; channelId: string; messageId: string; text: string };
 
 /** Implementação de `DiscordPort` em memória que grava todas as chamadas, para testes sem rede. */
 export class FakeDiscordPort implements DiscordPort {
@@ -90,5 +92,17 @@ export class FakeDiscordPort implements DiscordPort {
   async reply(channelId: string, messageId: string, text: string): Promise<{ messageId: string }> {
     this.calls.push({ op: "reply", channelId, messageId, text });
     return { messageId: `msg-${++this.seq}` };
+  }
+
+  /** Implementação de `pin` trocável nos testes (ex.: limite de 50 fixadas). */
+  pinImpl: (channelId: string, messageId: string) => Promise<void> = async () => {};
+
+  async pin(channelId: string, messageId: string): Promise<void> {
+    this.calls.push({ op: "pin", channelId, messageId });
+    await this.pinImpl(channelId, messageId);
+  }
+
+  async edit(channelId: string, messageId: string, text: string): Promise<void> {
+    this.calls.push({ op: "edit", channelId, messageId, text });
   }
 }

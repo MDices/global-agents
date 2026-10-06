@@ -20,7 +20,7 @@ function cwdName(cwd: string): string {
 }
 
 /**
- * Payload de hook de um teammate de um time (descartado até a T29). `teammate_name` (TeammateIdle/TaskCompleted)
+ * Payload de hook de um teammate de um time (vai só para o `TeamTracker`, nunca para `mapHookPayload`). `teammate_name` (TeammateIdle/TaskCompleted)
  * é sempre de teammate. `agent_type` também aparece em subagents da sessão normal (com o `session_id` dela) e em
  * sessões abertas com `--agent`; essas estão no inventário (`claude agents --json`), os teammates não — então
  * `agent_type` só conta como teammate quando a sessão é desconhecida.
@@ -29,7 +29,7 @@ export function isTeammatePayload(payload: unknown, isKnownSession: (sessionId: 
   if (typeof payload !== "object" || payload === null) return false;
   const p = payload as Record<string, unknown>;
   if (p["teammate_name"] !== undefined) return true;
-  if (p["agent_type"] === undefined) return false;
+  if (p["agent_type"] === undefined || p["agent_type"] === "") return false; // "" = subagent da própria sessão (SubagentStop)
   const sid = p["session_id"];
   return !(typeof sid === "string" && isKnownSession(sid));
 }

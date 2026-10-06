@@ -23,6 +23,11 @@ export interface HookServerOptions {
   /** Sessão presente no inventário? Usado no filtro de teammates (padrão: nenhuma). */
   isKnownSession?: (sessionId: string) => boolean;
   onEvents: (evs: AgentEvent[]) => void;
+  /**
+   * Todo payload de hook (menos `PermissionRequest`), antes do mapper, com a classificação de teammate. Payload de
+   * teammate vai só para cá: nunca vira `session.*`/`turn.*`.
+   */
+  onTeamPayload?: (payload: Record<string, unknown>, teammate: boolean) => void;
   onPermission?: (payload: PermissionPayload, respond: (d: HookDecision | null) => void) => void;
 }
 
@@ -111,7 +116,13 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
     }
 
     send(res, 204);
-    if (isTeammatePayload(payload, opts.isKnownSession ?? (() => false))) return; // teammates de um time: tratamento completo na T29
+    const teammate = isTeammatePayload(payload, opts.isKnownSession ?? (() => false));
+    try {
+      opts.onTeamPayload?.(payload as Record<string, unknown>, teammate);
+    } catch {
+      // idem: o painel do time nunca derruba o hook
+    }
+    if (teammate) return;
     const evs = mapHookPayload(payload, { machine: opts.machine, lookupName: opts.lookupName });
     if (evs.length > 0) {
       try {

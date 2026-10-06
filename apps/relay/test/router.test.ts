@@ -227,6 +227,104 @@ describe("sessões e threads", () => {
   });
 });
 
+describe("times de agentes (thread do líder)", () => {
+  type Member = { name: string; state: "working" | "idle" | "ended" };
+  type Task = { id: string; subject: string; status: "pending" | "completed"; owner?: string };
+  const update = (members: Member[], tasks: Task[] = []): AgentEvent =>
+    ev("team.update", { leadSessionId: "s1", team: "session-6370870f", members, tasks });
+  const panelPosts = (): string[] => postsTo(threadOf("s1")).filter((t) => t.startsWith("**👥 Time**"));
+
+  beforeEach(async () => {
+    emit(hello());
+    emit(ev("session.list", { sessions: [info("s1", "lider")] }));
+    await settle();
+  });
+
+  it("primeiro team.update posta o painel e fixa; os seguintes viram no máximo 1 edição a cada 5 s, com o último valor", async () => {
+    emit(update([{ name: "alpha", state: "working" }, { name: "beta", state: "working" }],
+      [{ id: "1", subject: "contar arquivos em docs", status: "pending" }, { id: "2", subject: "listar pastas de apps", status: "completed", owner: "beta" }]));
+    await settle();
+    const thread = threadOf("s1");
+    expect(panelPosts()).toEqual([
+      "**👥 Time** · session-6370870f · 2 teammates\n" +
+      "**Membros:** 🟢 alpha trabalhando · 🟢 beta trabalhando\n" +
+      "**Tarefas**\n" +
+      "☐ contar arquivos em docs\n" +
+      "☑ listar pastas de apps — beta\n" +
+      "-# lider · fedora/leonardo · atualizado às 18:40",
+    ]);
+    expect(port.of("pin")).toEqual([{ op: "pin", channelId: thread, messageId: expect.stringMatching(/^msg-\d+$/) as string }]);
+
+    for (const st of ["idle", "working", "idle"] as const) {
+      emit(update([{ name: "alpha", state: st }, { name: "beta", state: "ended" }]));
+      await settle();
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(port.of("edit")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2000); // 5 s desde o post
+    expect(port.of("edit")).toHaveLength(1);
+    expect(port.of("edit")[0]).toMatchObject({ channelId: thread, messageId: port.of("pin")[0]?.messageId });
+    expect(port.of("edit")[0]?.text).toContain("**Membros:** 💤 alpha ocioso · ⚫ beta encerrado");
+    expect(port.of("edit")[0]?.text).toContain("**Tarefas:** nenhuma");
+
+    emit(update([{ name: "alpha", state: "ended" }, { name: "beta", state: "ended" }]));
+    await settle();
+    expect(port.of("edit")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(port.of("edit")).toHaveLength(2);
+    expect(port.of("edit")[1]?.text).toContain("⚫ alpha encerrado");
+    expect(panelPosts()).toHaveLength(1);
+    expect(port.of("pin")).toHaveLength(1);
+  });
+
+  it("falha ao fixar só loga; o painel segue editável", async () => {
+    port.pinImpl = () => Promise.reject(new Error("limite de 50 fixadas"));
+    emit(update([{ name: "alpha", state: "working" }]));
+    await settle();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("limite de 50 fixadas"));
+    emit(update([{ name: "alpha", state: "idle" }]));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(port.of("edit")).toHaveLength(1);
+  });
+
+  it("team.event vira linha curta na thread do líder", async () => {
+    const te = (kind: Extract<AgentEvent, { type: "team.event" }>["kind"], extra: Record<string, string> = {}): AgentEvent =>
+      ev("team.event", { leadSessionId: "s1", kind, ...extra });
+    emit(te("task_created", { taskId: "1", subject: "contar arquivos em docs" }));
+    emit(te("task_completed", { teammate: "alpha", taskId: "1", subject: "contar arquivos em docs" }));
+    emit(te("teammate_idle", { teammate: "beta" }));
+    emit(te("teammate_reply", { teammate: "alpha", text: "docs tem 10 arquivos." }));
+    emit(te("teammate_ended", { teammate: "alpha" }));
+    emit(te("teammate_permission"));
+    await settle();
+    expect(postsTo(threadOf("s1"))).toEqual([
+      "📋 tarefa criada: contar arquivos em docs",
+      "✅ alpha concluiu: contar arquivos em docs",
+      "💤 beta ocioso",
+      "💬 alpha: docs tem 10 arquivos.",
+      "⚫ alpha encerrado",
+      "🟡 um teammate aguarda permissão no terminal do líder",
+    ]);
+  });
+
+  it("teamMembersOf: membros do último team.update que não encerraram", async () => {
+    expect(router.teamMembersOf("s1")).toEqual([]);
+    emit(update([{ name: "alpha", state: "working" }, { name: "beta", state: "ended" }, { name: "gama", state: "idle" }]));
+    await settle();
+    expect(router.teamMembersOf("s1")).toEqual(["alpha", "gama"]);
+  });
+
+  it("máquina silenciada pelo filtro de conta não ganha painel nem linhas", async () => {
+    db.machines.setFilterAccount(M, "outra@exemplo.com");
+    emit(update([{ name: "alpha", state: "working" }]));
+    emit(ev("team.event", { leadSessionId: "s1", kind: "teammate_permission" }));
+    await settle();
+    expect(postsTo(threadOf("s1"))).toEqual([]);
+    expect(port.of("pin")).toEqual([]);
+  });
+});
+
 describe("online/offline", () => {
   it("offline edita o tópico com a hora; online restaura", async () => {
     emit(hello());

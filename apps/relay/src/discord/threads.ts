@@ -1,4 +1,4 @@
-import { SessionStateSchema, type SessionState } from "@global-agents/protocol";
+import { SessionStateSchema, type AgentEvent, type SessionState, type TeamMemberState } from "@global-agents/protocol";
 import type { Db } from "../db.js";
 import type { DiscordPort, EmbedSpec } from "./bot.js";
 
@@ -54,10 +54,13 @@ export class LatestOnlyUpdater {
     private readonly intervalMs = CHANNEL_EDIT_INTERVAL_MS,
   ) {}
 
-  /** Informa o valor que já está no Discord (sem chamada), se a chave ainda não tem estado. */
-  seed(key: string, applied: string | null): void {
+  /**
+   * Informa o valor que já está no Discord (sem chamada), se a chave ainda não tem estado. `appliedAt`: quando ele
+   * foi aplicado (conta para o intervalo mínimo); padrão: há muito tempo.
+   */
+  seed(key: string, applied: string | null, appliedAt = Number.NEGATIVE_INFINITY): void {
     if (applied === null || this.slots.has(key)) return;
-    this.slots.set(key, { desired: applied, applied, inflight: false, lastStart: Number.NEGATIVE_INFINITY, timer: undefined });
+    this.slots.set(key, { desired: applied, applied, inflight: false, lastStart: appliedAt, timer: undefined });
   }
 
   set(key: string, value: string): void {
@@ -237,5 +240,88 @@ export class ThreadRegistry {
 
   private schedule(info: ThreadInfo): void {
     this.renamer.set(info.threadId, threadName(info.name, info.state));
+  }
+}
+
+/** Intervalo mínimo entre duas edições do painel `👥 Time` de uma thread. */
+export const TEAM_PANEL_EDIT_INTERVAL_MS = 5000;
+const MESSAGE_MAX = 2000;
+const MEMBER_LABEL: Record<TeamMemberState, string> = { working: "🟢 {} trabalhando", idle: "💤 {} ocioso", ended: "⚫ {} encerrado" };
+
+type TeamUpdate = Extract<AgentEvent, { type: "team.update" }>;
+type TeamEvent = Extract<AgentEvent, { type: "team.event" }>;
+
+export const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+/**
+ * Texto do painel fixado do time: cabeçalho, membros com estado, tarefas (☐/☑ e dono) e rodapé com a sessão do
+ * líder, a máquina e a hora. Cabe numa mensagem (≤ 2000), porque é editada no lugar.
+ */
+export function teamPanelText(u: Pick<TeamUpdate, "team" | "members" | "tasks">, sessionName: string, machine: string, now: Date): string {
+  const n = u.members.length;
+  const members = n === 0 ? "—" : u.members.map((m) => MEMBER_LABEL[m.state].replace("{}", m.name)).join(" · ");
+  const tasks = u.tasks.map((t) => `${t.status === "completed" ? "☑" : "☐"} ${t.subject}${t.owner !== undefined ? ` — ${t.owner}` : ""}`);
+  const lines = [
+    `**👥 Time** · ${u.team} · ${String(n)} ${n === 1 ? "teammate" : "teammates"}`,
+    `**Membros:** ${members}`,
+    ...(tasks.length === 0 ? ["**Tarefas:** nenhuma"] : ["**Tarefas**", ...tasks]),
+  ];
+  const footer = `-# ${sessionName} · ${machine} · atualizado às ${hhmm(now)}`;
+  const body = truncate(lines.join("\n"), MESSAGE_MAX - footer.length - 2);
+  return `${body}\n${footer}`;
+}
+
+/** Linha curta de um `team.event` na thread do líder. */
+export function teamEventLine(e: Pick<TeamEvent, "kind" | "teammate" | "subject" | "text">): string {
+  const who = e.teammate ?? "um teammate";
+  switch (e.kind) {
+    case "task_created": return truncate(`📋 tarefa criada: ${e.subject ?? ""}`, MESSAGE_MAX);
+    case "task_completed": return truncate(`✅ ${who} concluiu: ${e.subject ?? ""}`, MESSAGE_MAX);
+    case "teammate_idle": return truncate(`💤 ${who} ocioso`, MESSAGE_MAX);
+    case "teammate_reply": return truncate(`💬 ${who}: ${e.text ?? ""}`, MESSAGE_MAX);
+    case "teammate_ended": return truncate(`⚫ ${who} encerrado`, MESSAGE_MAX);
+    case "teammate_permission": return "🟡 um teammate aguarda permissão no terminal do líder";
+  }
+}
+
+/**
+ * Painel `👥 Time` por thread de líder: o primeiro valor é postado e fixado (falha ao fixar só vai para o log);
+ * os seguintes editam a mesma mensagem por um `LatestOnlyUpdater` (no máximo 1 edição em voo, intervalo mínimo de
+ * 5 s contado desde o post, só o último texto aplicado). O id da mensagem fica só em memória.
+ */
+export class TeamPanels {
+  private readonly messages = new Map<string, string>();
+  private readonly editor: LatestOnlyUpdater;
+
+  constructor(
+    private readonly port: DiscordPort,
+    private readonly log: (msg: string) => void,
+    intervalMs = TEAM_PANEL_EDIT_INTERVAL_MS,
+  ) {
+    this.editor = new LatestOnlyUpdater((threadId, text) => {
+      const messageId = this.messages.get(threadId);
+      return messageId === undefined ? Promise.resolve() : this.port.edit(threadId, messageId, text);
+    }, log, intervalMs);
+  }
+
+  /** Mostra `text` no painel da thread: posta e fixa na primeira vez, depois edita. */
+  async show(threadId: string, text: string): Promise<void> {
+    if (this.messages.has(threadId)) {
+      this.editor.set(threadId, text);
+      return;
+    }
+    const startedAt = Date.now();
+    const { messageId } = await this.port.post(threadId, text);
+    this.messages.set(threadId, messageId);
+    this.editor.seed(threadId, text, startedAt);
+    try {
+      await this.port.pin(threadId, messageId);
+    } catch (e) {
+      this.log(`falha ao fixar o painel do time na thread ${threadId}: ${(e as Error).message}`);
+    }
+  }
+
+  dispose(): void {
+    this.editor.dispose();
   }
 }

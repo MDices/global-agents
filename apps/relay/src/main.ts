@@ -111,7 +111,9 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     const routerLog = (m: string): void => { log("warn", m); };
     const threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log: routerLog });
     const router = createRouter({ db, port, threads, hub, log: routerLog });
-    const bridge = createCommandBridge({ db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
+    const bridge = createCommandBridge({
+      db, hub, port, allowedUserIds: cfg.allowedUserIds, log: routerLog, teamMembers: (id) => router.teamMembersOf(id),
+    });
     const slash = createSlashHandler({ db, threads, bridge, router, port, allowedUserIds: cfg.allowedUserIds, log: routerLog });
     // Com hub e servidor já fechados, espera (com teto) o que já estava na fila ir para o Discord, antes de
     // derrubar o bot e fechar o banco: fica logo acima do bot (ou do `db.close`, quando a porta é injetada).

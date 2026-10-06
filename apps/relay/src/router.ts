@@ -3,7 +3,9 @@ import type { AgentEvent, SessionInfo, SessionState } from "@global-agents/proto
 import type { Db } from "./db.js";
 import type { DiscordPort } from "./discord/bot.js";
 import { chunkText } from "./discord/chunk.js";
-import { LatestOnlyUpdater, parseState, truncate, type ThreadRegistry, type ThreadSession } from "./discord/threads.js";
+import {
+  hhmm, LatestOnlyUpdater, parseState, TeamPanels, teamEventLine, teamPanelText, truncate, type ThreadRegistry, type ThreadSession,
+} from "./discord/threads.js";
 import type { AgentHubEvents } from "./ws/server.js";
 
 type Log = (msg: string) => void;
@@ -39,9 +41,6 @@ export function isSilenced(db: Db, machine: string): boolean {
   if (m?.filterAccount == null) return false;
   return m.claudeAccount === null || !sameAccount(m.claudeAccount, m.filterAccount);
 }
-
-const hhmm = (d: Date): string =>
-  `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
 /** Canal da máquina: o gravado no banco, ou garante um (`ensureChannel`) e grava. Concorrência por máquina deduplicada. */
 export function machineChannelResolver(db: Db, port: DiscordPort): (machine: string) => Promise<string> {
@@ -98,6 +97,8 @@ export interface Router {
   projectsOf(machine: string): string[];
   /** Reaplica o tópico do canal da máquina (ex.: o filtro de conta mudou), pelo mesmo controle de rate limit. */
   refreshTopic(machine: string): void;
+  /** Teammates (não encerrados) do último `team.update` do líder `sessionId`; vazio sem time. */
+  teamMembersOf(sessionId: string): string[];
   /** Resolve quando todos os eventos já recebidos foram processados. */
   idle(): Promise<void>;
   dispose(): void;
@@ -120,6 +121,9 @@ export function createRouter(deps: RouterDeps): Router {
   const offlineSince = new Map<string, Date>();
   const queues = new Map<string, Promise<void>>();
   const topics = new LatestOnlyUpdater((channelId, topic) => port.editChannelTopic(channelId, topic), log);
+  const panels = new TeamPanels(port, log);
+  /** Teammates não encerrados por líder, do último `team.update` (para o `@nome` da ponte). */
+  const rosters = new Map<string, string[]>();
 
   const enqueue = (key: string, label: string, fn: () => Promise<void>): void => {
     const prev = queues.get(key) ?? Promise.resolve();
@@ -199,6 +203,17 @@ export function createRouter(deps: RouterDeps): Router {
     await postAll(thread ?? (await channelFor(machine)), chunkText(`⚠️ ${e.message}`));
   };
 
+  const onTeamUpdate = async (machine: string, e: EventOf<"team.update">): Promise<void> => {
+    rosters.set(e.leadSessionId, e.members.filter((m) => m.state !== "ended").map((m) => m.name));
+    const threadId = await threadFor(machine, e.leadSessionId);
+    const name = db.sessions.get(e.leadSessionId)?.name ?? `sessão ${e.leadSessionId.slice(0, 8)}`;
+    await panels.show(threadId, teamPanelText(e, name, machine, new Date()));
+  };
+
+  const onTeamEvent = async (machine: string, e: EventOf<"team.event">): Promise<void> => {
+    await port.post(await threadFor(machine, e.leadSessionId), teamEventLine(e));
+  };
+
   const handle = (machine: string, e: AgentEvent): Promise<void> => {
     // Filtro de conta: nada de thread nem post para a máquina enquanto a conta dela for outra. O hello sempre passa
     // (é ele que atualiza a conta); aviso sem sessão é da máquina, não de uma sessão, e também passa.
@@ -212,6 +227,8 @@ export function createRouter(deps: RouterDeps): Router {
       case "turn.prompt": return onPrompt(machine, e);
       case "turn.reply": return onReply(machine, e);
       case "agent.warning": return onWarning(machine, e);
+      case "team.update": return onTeamUpdate(machine, e);
+      case "team.event": return onTeamEvent(machine, e);
       default: return Promise.resolve(); // acks: ponte de comandos (commands.ts); permissões: tarefas seguintes
     }
   };
@@ -236,12 +253,14 @@ export function createRouter(deps: RouterDeps): Router {
 
   return {
     projectsOf: (machine) => [...(projects.get(machine) ?? [])],
+    teamMembersOf: (sessionId) => [...(rosters.get(sessionId) ?? [])],
     refreshTopic: setTopic,
     async idle() {
       while (queues.size > 0) await Promise.all(queues.values());
     },
     dispose() {
       topics.dispose();
+      panels.dispose();
       hub.off("event", onEvent);
       hub.off("online", onOnline);
       hub.off("offline", onOffline);

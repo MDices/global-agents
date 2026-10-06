@@ -28,4 +28,20 @@ describe("eventos", () => {
     expect(AgentEventSchema.safeParse({ ...env(), type: "command.ack", commandId: "c1", result: { sessionId: "u" } }).success).toBe(true);
     expect(AgentEventSchema.safeParse({ ...env(), type: "command.error", commandId: "c1", reason: "sessão encerrada" }).success).toBe(true);
   });
+  it("team.update com membros e tarefas (owner opcional)", () => {
+    const r = AgentEventSchema.safeParse({ ...env(), type: "team.update", leadSessionId: "l1", team: "session-l1",
+      members: [{ name: "alpha", state: "working" }, { name: "beta", state: "idle" }, { name: "gama", state: "ended" }],
+      tasks: [{ id: "1", subject: "contar", status: "pending" }, { id: "2", subject: "listar", status: "completed", owner: "beta" }] });
+    expect(r.success).toBe(true);
+    expect(AgentEventSchema.safeParse({ ...env(), type: "team.update", leadSessionId: "l1", team: "t",
+      members: [{ name: "alpha", state: "sleeping" }], tasks: [] }).success).toBe(false);
+  });
+  it("team.event com campos opcionais e kind fechado", () => {
+    for (const kind of ["task_created", "task_completed", "teammate_idle", "teammate_reply", "teammate_ended", "teammate_permission"]) {
+      expect(AgentEventSchema.safeParse({ ...env(), type: "team.event", leadSessionId: "l1", kind }).success).toBe(true);
+    }
+    expect(AgentEventSchema.safeParse({ ...env(), type: "team.event", leadSessionId: "l1", kind: "task_completed",
+      teammate: "alpha", taskId: "1", subject: "contar", text: "ok" }).success).toBe(true);
+    expect(AgentEventSchema.safeParse({ ...env(), type: "team.event", leadSessionId: "l1", kind: "teammate_spawned" }).success).toBe(false);
+  });
 });

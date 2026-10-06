@@ -30,6 +30,8 @@ export interface CommandBridgeDeps {
   port: DiscordPort;
   /** Só mensagens destes autores viram comando (nunca o canal decide). */
   allowedUserIds: readonly string[];
+  /** Teammates atuais do time cujo líder é a sessão (`@nome` na thread do líder vira repasse); padrão: nenhum. */
+  teamMembers?: (sessionId: string) => readonly string[];
   /** `machine` do envelope dos comandos que saem do relay. */
   relayMachine?: string;
   log?: (msg: string) => void;
@@ -82,6 +84,8 @@ interface Inflight {
  * Ponte thread do Discord → `session.send` na máquina.
  *
  * - Só autores da allowlist, nunca bots; threads que não são de sessão são ignoradas em silêncio.
+ * - `@<nome> <texto>` na thread de um líder de time, com `<nome>` entre os teammates atuais, vai ao líder como
+ *   `Repasse ao teammate <nome>: <texto>` (teammates não têm inbox); `@nome` desconhecido é prompt normal.
  * - Texto começando com `/` ou `!` é recusado (❌ + resposta), nada é enviado.
  * - `commandId` é o id da mensagem do Discord: a máquina deduplica por ele, então um reenvio da fila é seguro.
  * - Online: envia e só reage no ack (✅) ou no erro (❌ + razão). Offline: grava em `pending_commands` com validade de
@@ -189,6 +193,13 @@ export function createCommandBridge(deps: CommandBridgeDeps): CommandBridge {
     const head = text.trimStart();
     if (head === "") return;
     const { threadId, messageId } = msg;
+    const relay = /^@(\S+)\s+(\S[\s\S]*)$/.exec(head);
+    if (relay?.[1] !== undefined && relay[2] !== undefined && (deps.teamMembers?.(session.sessionId) ?? []).includes(relay[1])) {
+      const cmd: RelayCommand = { ...newEnvelope(relayMachine), type: "session.send", commandId: messageId, sessionId: session.sessionId,
+        text: `Repasse ao teammate ${relay[1]}: ${relay[2]}` };
+      dispatch(session.machine, cmd, { kind: "thread", threadId });
+      return;
+    }
     if (head.startsWith("/") || head.startsWith("!")) {
       discord(messageId, "falha ao reagir", () => port.react(threadId, messageId, FAIL));
       replyAll(threadId, messageId, REJECT_CLAUDE_COMMAND_TEXT);

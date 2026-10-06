@@ -464,3 +464,34 @@ describe("submit: comando com origem por callback (slash commands, menção)", (
     expect(log).toHaveBeenCalledWith(expect.stringContaining("boom"));
   });
 });
+
+describe("@nome na thread do líder (times de agentes)", () => {
+  const members = new Map<string, string[]>([[SESSION, ["alpha", "beta"]]]);
+  beforeEach(() => {
+    bridge.dispose();
+    bridge = createCommandBridge({ db, hub, port, allowedUserIds: [ALLOWED], log, teamMembers: (id) => members.get(id) ?? [] });
+    hub.online.add(M);
+  });
+
+  it("@alpha <texto> com alpha no time → session.send com o repasse ao líder", async () => {
+    await bridge.onThreadMessage(msg({ content: "@alpha foca no backend" }));
+    expect(hub.sent).toHaveLength(1);
+    expect(hub.sent[0]?.cmd).toMatchObject({ type: "session.send", sessionId: SESSION, commandId: "m-1", text: "Repasse ao teammate alpha: foca no backend" });
+    await bridge.onAck(M, ack("m-1"));
+    await settle();
+    expect(ops()).toEqual([`react ${THREAD} m-1 ✅`]);
+  });
+
+  it("@nome desconhecido (ou sem texto) segue como prompt normal", async () => {
+    await bridge.onThreadMessage(msg({ messageId: "m-2", content: "@zeta faz isso" }));
+    await bridge.onThreadMessage(msg({ messageId: "m-3", content: "@alpha" }));
+    expect(hub.sent.map((s) => s.cmd.type === "session.send" ? s.cmd.text : "")).toEqual(["@zeta faz isso", "@alpha"]);
+  });
+
+  it("sem time (teamMembers ausente) @alpha é texto normal", async () => {
+    bridge.dispose();
+    bridge = createCommandBridge({ db, hub, port, allowedUserIds: [ALLOWED], log });
+    await bridge.onThreadMessage(msg({ content: "@alpha foca no backend" }));
+    expect(hub.sent[0]?.cmd).toMatchObject({ text: "@alpha foca no backend" });
+  });
+});

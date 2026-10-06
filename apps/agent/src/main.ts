@@ -12,6 +12,7 @@ import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
 import type { AgentConfig } from "./config.js";
 import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
+import { TeamTracker } from "./team/tracker.js";
 import { RelayClient, type RelayClientEvents, type RelayClientOptions } from "./transport/client.js";
 import { Outbox } from "./transport/outbox.js";
 
@@ -49,6 +50,8 @@ export interface AgentDeps {
   accountCheckMs: number;
   /** Substitui partes do despacho de comandos (testes; `onPermissionDecide` vem em T20). */
   commands: Partial<Omit<CommandDeps, "machine" | "inventory">>;
+  /** Pasta dos `config.json` de times (padrão `~/.claude/teams`). */
+  teamsDir: string;
 }
 
 export interface Agent {
@@ -117,6 +120,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
   let account: string | undefined;
   let client: RelayClientLike | undefined;
   let hookServer: HookServer | undefined;
+  let team: TeamTracker | undefined;
   let accountTimer: NodeJS.Timeout | undefined;
   let lastInventoryError = "";
 
@@ -160,12 +164,21 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     async start(): Promise<void> {
       [cVersion, account] = await Promise.all([claudeVersion(run), claudeAccount(run)]);
 
+      const isKnownSession = (id: string): boolean => inventory.find(id) !== undefined;
+      const tracker = new TeamTracker({
+        machine,
+        emit: (ev) => client?.send(ev),
+        isKnownSession,
+        ...(deps.teamsDir !== undefined ? { teamsDir: deps.teamsDir } : {}),
+      });
+      team = tracker;
       hookServer = await hookServerFactory({
         port: cfg.port,
         machine,
         lookupName,
-        isKnownSession: (id) => inventory.find(id) !== undefined,
+        isKnownSession,
         onEvents: (evs) => { for (const ev of evs) client?.send(ev); },
+        onTeamPayload: (payload, teammate) => { tracker.observe(payload, teammate); },
       });
 
       const outbox = new Outbox(cfg.dataDir, {
@@ -199,6 +212,8 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       const srv = hookServer;
       hookServer = undefined;
       await srv?.close();
+      team?.dispose();
+      team = undefined;
       client?.stop();
       client = undefined;
     },

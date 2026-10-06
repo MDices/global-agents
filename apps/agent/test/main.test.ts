@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
@@ -156,6 +156,20 @@ describe("createAgent", () => {
     expect(client.sent[2]).toMatchObject({ sessionId: "s9" });
   });
 
+  it("fixture bg do time: teammates viram team.* (nunca session.*/turn.* deles); o líder segue normal", async () => {
+    const lead = "72a1377b-4d94-4bf5-921c-e6311d55f837";
+    const { client, inventory, post } = await setup({ teamsDir: join(dir, "teams") });
+    inventory.set([{ sessionId: lead, cwd: "/home/leonardo/dev/work/global-agents", name: "ga-team-fixture", kind: "background" }]);
+    const lines = readFileSync(new URL("./fixtures/team/team-hooks-bg.jsonl", import.meta.url), "utf8").split("\n").filter((l) => l !== "");
+    for (const l of lines) await post(JSON.parse(l));
+    await vi.waitFor(() => { expect(client.sent.some((e) => e.type === "team.update")).toBe(true); });
+    const reply = client.sent.find((e) => e.type === "team.event" && e.kind === "teammate_reply");
+    expect(reply).toMatchObject({ leadSessionId: lead, teammate: "alpha", text: "docs tem 10 arquivos." });
+    const ofSession = client.sent.filter((e) => e.type.startsWith("session.") || e.type.startsWith("turn."));
+    expect(ofSession.every((e) => !("sessionId" in e) || e.sessionId === lead)).toBe(true);
+    expect(client.types()).toContain("turn.reply");
+  });
+
   it("comando recebido passa pelo handler: session.stop sem bgId → command.error de background", async () => {
     const { client, inventory } = await setup();
     inventory.set([SESSION]);
@@ -215,6 +229,7 @@ describe("isTeammatePayload", () => {
     expect(isTeammatePayload({ session_id: "s1", hook_event_name: "TeammateIdle", teammate_name: "alpha" }, known)).toBe(true);
     expect(isTeammatePayload({ session_id: "s1", cwd: "/x", hook_event_name: "Stop" }, known)).toBe(false);
     expect(isTeammatePayload({ session_id: "s2", cwd: "/x", hook_event_name: "Stop" }, known)).toBe(false);
+    expect(isTeammatePayload({ session_id: "s2", cwd: "/x", hook_event_name: "SubagentStop", agent_type: "" }, known)).toBe(false);
     expect(isTeammatePayload(null, known)).toBe(false);
     expect(isTeammatePayload("x", known)).toBe(false);
   });
