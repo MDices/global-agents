@@ -140,7 +140,10 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
         port,
         close: () =>
           new Promise<void>((done) => {
-            for (const res of pending) send(res, 204);
+            for (const res of pending) {
+              if (!res.headersSent) res.setHeader("connection", "close");
+              send(res, 204);
+            }
             pending.clear();
             server.close(() => done());
             server.closeIdleConnections();
