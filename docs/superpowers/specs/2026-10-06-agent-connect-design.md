@@ -1,0 +1,224 @@
+# agent-connect — design (2026-10-06)
+
+Status: aprovado em conversa seção a seção (arquitetura, componentes/contrato, fluxo de dados); pesquisa e spikes em
+`docs/research/2026-10-06-pesquisa-tecnologias.md`.
+
+## 1. Objetivo
+
+Um canal onde Leonardo, de qualquer lugar, **observa** o que cada sessão do Claude Code está fazendo em cada um dos
+seus PCs (Linux e Windows) e **comanda**: manda prompts para sessões existentes, cria sessões novas, aprova ou nega
+permissões. Primeira interface: Discord. Segunda interface, futura: global-pets, consumindo o mesmo stream de eventos.
+
+Fora de escopo no v1: multiusuário, streaming token a token no Discord, anexos, voz, interface web própria, times
+entre máquinas (o Duo do Victor cobre isso; agent teams dentro de uma sessão já funcionam na arquitetura escolhida).
+
+## 2. Decisões estruturais
+
+| Tema | Decisão | Motivo |
+|---|---|---|
+| Motor | **Tudo é sessão Claude Code**: sessões nascem no terminal ou via `claude --bg --name`; prompts entram pelo socket de inbox; `claude attach` abre no terminal | Zero código de motor; mesma sessão, plugins, memória; verificado Linux + Windows |
+| Rede | Relay na VPS; agentes conectam **para fora** via WebSocket com token por máquina | Nada aberto nos PCs; Discord é sempre saída |
+| Entrada em sessões com bypass | `crossSessionInbound: "accept"` nas user settings de cada máquina | Explícito e auditável; sem autodeclaração de classe |
+| Aprovação remota | Hook `PermissionRequest` segurado pelo agente até o clique no Discord | Verificado em sessão `--bg` sem ninguém anexado |
+| Discord | Canal por máquina, thread por sessão, `/novo` no canal | Layout pedido pelo Leonardo |
+| Formato de fio | Envelope JSON por linha, extensão do `session.status` do global-pets | Pet vira segundo consumidor sem segundo protocolo |
+| Stack | TypeScript, Node 24 LTS, `ws`, `discord.js` 14, `node:sqlite`; monorepo pnpm | Mesma stack do global-pets; libs verificadas |
+| Empacotamento | Sem compilar: `node` + pacote; Linux `systemd --user`, Windows WinSW | SEA/bun brigam com binário nativo |
+
+## 3. Arquitetura
+
+```
+ PC (Linux ou Windows)                              VPS                         Discord
+ ┌───────────────────────────────┐    WSS saída    ┌──────────────────────┐    gateway   ┌─────────┐
+ │ Claude Code sessões           │ ──────────────▶ │ relay (Node)         │ ◀──────────▶ │ bot     │
+ │  ├ hooks ──POST 127.0.0.1──┐  │ ◀────────────── │  ├ ws server + auth  │              │ canais  │
+ │  └ inbox socket/pipe ◀──┐  │  │   comandos      │  ├ SQLite (mapas)    │              │ threads │
+ │ agente local (Node)      │  │  │                 │  └ bot discord.js    │              └─────────┘
+ │  ├ hooks/ (instalador)   │  │  │                 └──────────────────────┘
+ │  ├ claude/ (inventário, spawn, injeção)                 ▲
+ │  ├ permissions/ (segura PermissionRequest)              │ futuro: global-pets lê o mesmo
+ │  └ transport/ (ws, outbox)                               │ stream direto do agente local
+ └───────────────────────────────┘
+```
+
+Três componentes, dois pacotes implantáveis mais um pacote compartilhado:
+
+- `packages/protocol`: tipos + validação (zod) do envelope. Sem I/O.
+- `apps/agent`: agente local. Serviço de usuário, um por PC.
+- `apps/relay`: relay + bot Discord, um processo na VPS.
+
+## 4. Contrato de eventos (`packages/protocol`)
+
+Uma linha JSON por mensagem. Todo envelope tem `v: 1`, `id` (uuid), `ts` (ISO 8601), `machine` (hostname
+normalizado). Eventos (agente → relay) e comandos (relay → agente):
+
+### 4.1 Eventos
+
+| `type` | Campos | Origem |
+|---|---|---|
+| `agent.hello` | `version`, `os`, `claudeVersion`, `projects[]` (cwds sugeridos para `/novo`) | conexão |
+| `session.list` | `sessions[]` com `sessionId`, `name`, `cwd`, `kind`, `status`, `state?`, `waitingFor?`, `bgId?` | `claude agents --json`, na conexão e a cada mudança (poll 5 s com diff) |
+| `session.status` | `sessionId`, `name`, `cwd`, `state` ∈ `working\|waiting\|done\|error`, `snippet?` | hooks `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd` |
+| `turn.prompt` | `sessionId`, `text`, `source` ∈ `terminal\|remote` | hook `UserPromptSubmit` (`source=remote` quando o texto começa com a tag de cross-session) |
+| `turn.reply` | `sessionId`, `text` (inteiro), `stopReason` | hook `Stop` (`last_assistant_message`) |
+| `permission.request` | `sessionId`, `requestId`, `tool`, `description`, `inputPreview`, `expiresAt` | hook `PermissionRequest` |
+| `permission.resolved` | `requestId`, `by` ∈ `remote\|terminal\|timeout`, `behavior` | agente |
+| `command.ack` / `command.error` | `commandId`, `result?` / `reason` | resposta a comando |
+
+### 4.2 Comandos
+
+| `type` | Campos | Ação no agente |
+|---|---|---|
+| `session.create` | `commandId`, `cwd`, `name`, `prompt`, `permissionMode` | `claude --bg --name <name> --permission-mode <mode> "<prompt>"` com ambiente limpo de `CLAUDE_CODE_*`; resolve `sessionId` via `agents --json`; `ack` com `sessionId`, `bgId` |
+| `session.send` | `commandId`, `sessionId`, `text` | injeta no inbox; `ack` quando a linha foi escrita |
+| `session.stop` | `commandId`, `sessionId` | `claude stop <bgId>` (só bg); `error` para interativa |
+| `permission.decide` | `commandId`, `requestId`, `behavior` ∈ `allow\|deny` | destrava o hook pendente |
+
+Regras: `commandId` idempotente (reenvio recebe o mesmo `ack`); tamanho máximo de `text` 100 kB; o relay nunca
+manda texto que comece com `/` ou `!` como `session.send` (vira erro "comandos do Claude não são aceitos").
+
+## 5. Agente local (`apps/agent`)
+
+### 5.1 `hooks/`
+
+- Scripts `agent-connect-hook.sh` (bash + `jq` opcional, sem `jq` manda o payload cru) e `agent-connect-hook.ps1`.
+  Fazem **só** um POST em `http://127.0.0.1:48476/hook` com o JSON de stdin e `hook_event_name`. Timeout 2 s,
+  `exit 0` sempre. Exceção: `PermissionRequest` mantém a conexão aberta e imprime no stdout a decisão que o agente
+  devolver (ou nada, se o agente mandar "deixa no terminal").
+- Instalador `install` (CLI do agente): mescla em `~/.claude/settings.json` os hooks `UserPromptSubmit`,
+  `Notification`, `Stop`, `SessionEnd`, `PermissionRequest` (este com `timeout: 1800`) e a chave
+  `crossSessionInbound: "accept"`. Idempotente, atômico, preserva chaves alheias (portar `hookInstaller.ts` do
+  global-pets). `uninstall` remove só o que é dele.
+- Convivência com o hook do global-pets: entradas distintas no mesmo array; nenhum dos dois toca no outro.
+
+### 5.2 `claude/`
+
+- `inventory.ts`: roda `claude agents --json` (poll 5 s), normaliza, emite `session.list` só quando muda. Lê
+  `~/.claude/sessions/<pid>.json` para `messagingSocketPath`; lê `<pid>.<hash>.key` para `peerToken` (Windows).
+- `spawn.ts`: `session.create`. Limpa `CLAUDE_CODE_*` do env, roda `claude --bg …`, parseia o id curto, espera o
+  `sessionId` aparecer no inventário (até 30 s).
+- `inject.ts`: **único arquivo que conhece o formato `msgV: 1`**. Linux/macOS: Unix socket; Windows: named pipe com
+  primeira linha `{"type":"auth","token":<peerToken>}`. Conteúdo:
+  `<cross-session-message from="agent-connect" from-name="discord:<usuario>">\n<texto>\n</cross-session-message>`.
+  Verifica `peerProtocol === 1` no registro; se diferente, usa `fallback-pty.ts` (`claude --resume <id> "<texto>"`
+  num pty via `node-pty`, aguarda "Sent your prompt", envia Ctrl+Z) e emite aviso.
+- `stop.ts`: `claude stop <bgId>`.
+
+### 5.3 `permissions/`
+
+Servidor HTTP local recebe o POST do hook `PermissionRequest`, registra `requestId` (uuid próprio; o payload do hook
+não traz um), emite `permission.request`, e **segura a resposta HTTP** até: chegar `permission.decide` (responde
+`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":…}}}`), a sessão deixar de estar
+`waiting` no inventário (decidido no terminal → responde vazio, emite `permission.resolved by=terminal`), ou passar
+`expiresAt` (30 min → `deny`, emite `resolved by=timeout`).
+
+### 5.4 `transport/`
+
+`ws` cliente para `wss://<relay>/ws`, header `Authorization: Bearer <token da máquina>`, ping/pong 30 s, backoff
+exponencial 1 s → 60 s. **Outbox** em disco (JSONL em `~/.agent-connect/outbox/`) para eventos enquanto offline,
+drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (só o último vale).
+
+### 5.5 Configuração
+
+`~/.agent-connect/config.json`: `relayUrl`, `machineName`, `token`, `projects[]`, `port` (padrão 48476). CLI:
+`agent-connect install | uninstall | run | status | doctor`. `doctor` roda os checks dos spikes (versão do Claude,
+`agents --json`, socket/pipe acessível, hooks presentes).
+
+## 6. Relay + bot (`apps/relay`)
+
+### 6.1 Persistência (`node:sqlite`)
+
+| Tabela | Colunas |
+|---|---|
+| `machines` | `name` PK, `token_hash`, `channel_id`, `last_seen`, `os`, `claude_version` |
+| `sessions` | `session_id` PK, `machine`, `name`, `cwd`, `thread_id`, `bg_id`, `state`, `updated_at` |
+| `permissions` | `request_id` PK, `session_id`, `message_id`, `status`, `decided_by`, `decided_at` |
+| `pending_commands` | `command_id` PK, `machine`, `payload`, `created_at`, `expires_at`, `discord_message_id` |
+
+### 6.2 Roteamento
+
+- Evento com `sessionId` sem thread → cria thread no canal da máquina (nome = `name` truncado a 100), grava mapa,
+  primeira mensagem: cwd, `claude attach <bgId>` quando houver, estado.
+- `turn.prompt` → posta como citação `🧑 prompt` (ou `💬 via Discord` quando `source=remote`, sem repostar o texto).
+- `turn.reply` → fatia em ≤ 1900 chars preferindo quebras de parágrafo; posta em sequência; atualiza emoji de estado
+  no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/30 s por thread.
+- `permission.request` → mensagem com embed (ferramenta, descrição, prévia em bloco de código até 1000 chars) e
+  botões `Permitir` / `Negar`; clique → `permission.decide`; `permission.resolved` edita o card com o desfecho.
+- Mensagem humana numa thread mapeada → `session.send` → reação ✅ no ack, ❌ no erro, ⏳ se máquina offline
+  (comando vai para `pending_commands`, validade 1 h; ao expirar, edita a reação para ❌ e avisa).
+- `/novo prompt:<texto> projeto:<cwd> modo:<default|acceptEdits|plan|bypassPermissions>` no canal → `session.create`
+  → thread criada no `ack`. `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
+- Máquina conecta pela primeira vez → cria o canal `#<machine>` na categoria configurada.
+
+### 6.3 Segurança
+
+- Allowlist de Discord user IDs em config; qualquer outro remetente é ignorado em silêncio (gate no **autor**, não no
+  canal). Botões de permissão também checam o autor do clique.
+- Token por máquina gerado pelo relay (`relay machine add <name>`), guardado como hash.
+- Só a porta 443 exposta, via Caddy (`reverse_proxy` com upgrade de WebSocket, TLS automático).
+- Intent `MessageContent` ligado no portal; bot com `Public Bot` desligado.
+
+## 7. Fluxos ponta a ponta
+
+1. **Observar**: hook → agente → `turn.prompt`/`session.status` → relay cria/acha thread → posta; `Stop` →
+   `turn.reply` → fatias.
+2. **Mandar prompt**: resposta na thread → allowlist → `session.send` → `inject.ts` → `ack` → ✅; resposta volta pelo
+   fluxo 1. Offline → fila.
+3. **Criar chat**: `/novo` → `session.create` → `spawn.ts` → `ack` com `sessionId` → thread ligada antes do primeiro
+   `Stop`; primeira mensagem traz `claude attach <id>`.
+4. **Aprovar permissão**: hook segurado → `permission.request` → card com botões → `permission.decide` → hook
+   responde → `permission.resolved` → card editado.
+
+## 8. Erros e resiliência
+
+| Situação | Comportamento |
+|---|---|
+| Agente fora do ar | Hook falha o POST em 2 s e sai 0; Claude segue normal; `PermissionRequest` sem agente → hook não imprime nada → prompt fica no terminal |
+| VPS fora do ar | Outbox em disco; drena em ordem na volta; `session.list` colapsado |
+| Máquina offline para um comando | `pending_commands` por 1 h; ⏳ → ✅/❌ |
+| Injeção falha (socket sumiu, sessão morreu) | `command.error` com motivo; ❌ e sugestão de `/novo` |
+| `peerProtocol` ≠ 1 ou formato mudou | `fallback-pty.ts`; evento `agent.warning` visível na thread |
+| Timeout da permissão (30 min) | `deny`; card marca "expirou" |
+| Thread arquivada pelo Discord | Mensagem nova desarquiva automaticamente; relay não precisa agir |
+| Rate limit do Discord | Fila por canal com respeito a `Retry-After`; edições de nome de thread ≤ 1×/30 s |
+
+## 9. Testes
+
+- `packages/protocol`: validação de todos os envelopes (válidos, campos faltando, versão errada).
+- `apps/agent`: unit em `inventory` (fixtures reais do `agents --json` Linux e Windows), `inject` (servidor Unix/pipe
+  falso captura a linha), `permissions` (segura/solta/expira), outbox (ordem, colapso, reinício), instalador (merge
+  idempotente com settings que já têm o hook do global-pets). Integração opcional (`AGENT_CONNECT_E2E=1`): sessão
+  `--bg` real, injeção e leitura do transcript, nas duas plataformas.
+- `apps/relay`: unit em fatiamento, roteamento thread↔sessão, allowlist, fila de comandos; integração com um agente
+  falso em WebSocket; bot testado contra um servidor Discord de teste do Leonardo com `DISCORD_TEST_GUILD`.
+- Gate: `pnpm test` + `pnpm typecheck` + `pnpm lint` verdes antes de cada merge.
+
+## 10. Modelo de execução (quem implementa)
+
+O código será escrito por **subagentes**, não pela sessão de planejamento. Cada tarefa do plano recebe uma etiqueta
+de dificuldade que define o modelo:
+
+| Etiqueta | Modelo | Critério |
+|---|---|---|
+| `S` | Sonnet | Contrato claro, poucas decisões, testes unitários diretos: tipos/zod, fatiamento, SQLite, instalador, scripts de hook, config, CLI, compose/Caddy |
+| `O` | Opus | Integração com comportamento externo não trivial ou concorrência: `inject.ts` (socket + pipe + fallback pty), `permissions/` (segurar HTTP com três saídas), `transport/` (outbox + reconexão), roteamento do bot com rate limit e fila, testes e2e com Claude real |
+
+Toda tarefa entrega com testes (TDD), passa pelo gate da seção 9, e tem revisão por um segundo subagente antes do
+merge. O planejador (esta sessão) só coordena, revisa e integra.
+
+## 11. Marcos
+
+1. **M1 Observar**: protocol + agente (hooks, inventário, transport) + relay (canal/thread, prompts, respostas),
+   Linux. Entrega: ver no Discord as sessões deste PC.
+2. **M2 Comandar**: `session.send`, `/novo`, `/parar`, fila offline. Entrega: criar e dirigir chats pelo Discord.
+3. **M3 Permissões**: hook `PermissionRequest` + cards com botões.
+4. **M4 Windows**: scripts `.ps1`, named pipe, WinSW, `doctor`; validação no Toneli-PC.
+5. **M5 Deploy**: Docker compose + Caddy na VPS, `systemd --user` no Linux, documentação de instalação.
+
+## 12. Riscos aceitos
+
+- Formato `msgV: 1` do inbox não é contrato público: isolado em um arquivo, com fallback e aviso.
+- Mensagem injetada é tratada como "de outra sessão": não aprova permissões nem roda `/comandos` (por desenho da
+  Anthropic); a aprovação vai pelo hook.
+- Channels, Remote Control e agent view estão em preview; `--channels` e `--teammate-mode` nem aparecem no `--help`.
+  O design não depende de Channels; depende de `--bg`/`agents --json` (preview, mas estável desde v2.1.139).
