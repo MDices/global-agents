@@ -147,6 +147,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
         port: cfg.port,
         machine,
         lookupName,
+        isKnownSession: (id) => inventory.find(id) !== undefined,
         onEvents: (evs) => { for (const ev of evs) client?.send(ev); },
       });
 

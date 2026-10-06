@@ -2,7 +2,7 @@
 import { cpSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONFIG_PATH, loadConfig, parseConfig, saveConfig, type AgentConfig } from "./config.js";
+import { DEFAULT_CONFIG_PATH, installConfig, loadConfig, saveConfig } from "./config.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
 import { createAgent } from "./main.js";
@@ -56,15 +56,12 @@ function install(a: Args): void {
   const fingerprint = one(a, "--fingerprint");
   const path = configPath(a);
   // Reinstalar mantém o que não foi passado agora (machineName, porta, dataDir…).
-  const previous: Partial<AgentConfig> = existsSync(path) ? loadConfig(path) : {};
+  const previous = existsSync(path) ? loadConfig(path) : undefined;
   const projects = (a.flags.get("--project") ?? []).map((p) => resolve(p));
-  const cfg = parseConfig({
-    ...previous,
-    relayUrl,
-    token,
-    ...(fingerprint !== undefined ? { relayCertFingerprint: fingerprint } : {}),
-    ...(projects.length > 0 ? { projects } : {}),
+  const { cfg, warnings } = installConfig(previous, {
+    relayUrl, token, projects, ...(fingerprint !== undefined ? { fingerprint } : {}),
   });
+  for (const w of warnings) console.warn(`aviso: ${w}`);
   saveConfig(cfg, path);
   console.log(`config gravada em ${path}`);
 

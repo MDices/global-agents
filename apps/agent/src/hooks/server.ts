@@ -20,6 +20,8 @@ export interface HookServerOptions {
   port: number;
   machine: string;
   lookupName: (sessionId: string) => string | undefined;
+  /** Sessão presente no inventário? Usado no filtro de teammates (padrão: nenhuma). */
+  isKnownSession?: (sessionId: string) => boolean;
   onEvents: (evs: AgentEvent[]) => void;
   onPermission?: (payload: PermissionPayload, respond: (d: HookDecision | null) => void) => void;
 }
@@ -109,7 +111,7 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
     }
 
     send(res, 204);
-    if (isTeammatePayload(payload)) return; // teammates de um time: tratamento completo na T29
+    if (isTeammatePayload(payload, opts.isKnownSession ?? (() => false))) return; // teammates de um time: tratamento completo na T29
     const evs = mapHookPayload(payload, { machine: opts.machine, lookupName: opts.lookupName });
     if (evs.length > 0) {
       try {

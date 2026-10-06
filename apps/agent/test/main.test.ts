@@ -126,14 +126,30 @@ describe("createAgent", () => {
     expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "proj" });
   });
 
-  it("payloads de teammate (agent_type/teammate_name) são descartados", async () => {
+  it("Stop de teammate (agent_type, sessão fora do inventário) é descartado", async () => {
     const { client, post } = await setup();
     expect((await post(TEAMMATE_STOP)).status).toBe(204);
-    expect((await post({ session_id: "t2", cwd: "/x", hook_event_name: "TaskCompleted", teammate_name: "alpha" })).status).toBe(204);
-    // um hook normal depois prova que os anteriores já foram processados (e descartados)
+    // um hook normal depois prova que o anterior já foi processado (e descartado)
     await post({ session_id: "s9", cwd: "/x/y", hook_event_name: "SessionEnd" });
     await vi.waitFor(() => { expect(client.types()).toEqual(["agent.hello", "session.status"]); });
     expect(client.sent[1]).toMatchObject({ sessionId: "s9" });
+  });
+
+  it("agent_type de subagent da sessão líder (no inventário) não é descartado → waiting", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([SESSION]);
+    await post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "Notification", agent_type: "general-purpose", message: "precisa de permissão" });
+    await vi.waitFor(() => { expect(client.types()).toEqual(["agent.hello", "session.list", "session.status"]); });
+    expect(client.sent[2]).toMatchObject({ type: "session.status", sessionId: "s1", state: "waiting", snippet: "precisa de permissão" });
+  });
+
+  it("teammate_name é descartado mesmo com a sessão no inventário", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([SESSION]);
+    await post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "Stop", teammate_name: "alpha", last_assistant_message: "x" });
+    await post({ session_id: "s9", cwd: "/x/y", hook_event_name: "SessionEnd" });
+    await vi.waitFor(() => { expect(client.types()).toEqual(["agent.hello", "session.list", "session.status"]); });
+    expect(client.sent[2]).toMatchObject({ sessionId: "s9" });
   });
 
   it("comando recebido → command.error 'comandos ainda não suportados'", async () => {
@@ -171,11 +187,14 @@ describe("createAgent", () => {
 });
 
 describe("isTeammatePayload", () => {
-  it("reconhece agent_type e teammate_name; sessões comuns não", () => {
-    expect(isTeammatePayload(TEAMMATE_STOP)).toBe(true);
-    expect(isTeammatePayload({ hook_event_name: "TeammateIdle", teammate_name: "alpha" })).toBe(true);
-    expect(isTeammatePayload({ session_id: "s1", cwd: "/x", hook_event_name: "Stop" })).toBe(false);
-    expect(isTeammatePayload(null)).toBe(false);
-    expect(isTeammatePayload("x")).toBe(false);
+  const known = (id: string): boolean => id === "s1";
+  it("teammate_name sempre; agent_type só fora do inventário; sessões comuns não", () => {
+    expect(isTeammatePayload(TEAMMATE_STOP, known)).toBe(true);
+    expect(isTeammatePayload({ ...TEAMMATE_STOP, session_id: "s1" }, known)).toBe(false);
+    expect(isTeammatePayload({ session_id: "s1", hook_event_name: "TeammateIdle", teammate_name: "alpha" }, known)).toBe(true);
+    expect(isTeammatePayload({ session_id: "s1", cwd: "/x", hook_event_name: "Stop" }, known)).toBe(false);
+    expect(isTeammatePayload({ session_id: "s2", cwd: "/x", hook_event_name: "Stop" }, known)).toBe(false);
+    expect(isTeammatePayload(null, known)).toBe(false);
+    expect(isTeammatePayload("x", known)).toBe(false);
   });
 });
