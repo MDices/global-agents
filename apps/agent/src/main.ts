@@ -6,6 +6,7 @@ import { injectPrompt } from "./claude/inject.js";
 import { Inventory, type RunFn } from "./claude/inventory.js";
 import { readRegistry } from "./claude/registry.js";
 import { spawnSession, type SpawnRun } from "./claude/spawn.js";
+import { resumeViaPty } from "./claude/fallback-pty.js";
 import { runSlash } from "./claude/slash.js";
 import { stopSession } from "./claude/stop.js";
 import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
@@ -114,6 +115,8 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),
     slash: (input) => runSlash({ ...input, claudeBin: cfg.claudeBin }),
+    resume: (input) => resumeViaPty({ ...input, claudeBin: cfg.claudeBin }),
+    onWarning: (message, sessionId) => client?.send({ ...newEnvelope(machine), type: "agent.warning", message, sessionId }),
     onPermissionDecide: (requestId, behavior) => permissions.decide(requestId, behavior),
     ...deps.commands,
   });

@@ -1,20 +1,14 @@
-import xtermHeadless from "@xterm/headless";
-import * as nodePty from "node-pty";
 import type { SlashCommandName } from "@global-agents/protocol";
-import { cleanEnv } from "./exec.js";
+import {
+  COLS, ROWS, Terminal, detachAndReap, hasInputPrompt, loadSpawnPty, ptyEnv, renderLines, safeWrite, sleep, toScreen,
+  type SpawnPty,
+} from "./pty.js";
 import { BUSY_TEXT, SLASH_WHILE_BUSY } from "./slash-rules.js";
 
 export { BUSY_TEXT, SLASH_WHILE_BUSY };
+export { hasInputPrompt };
+export type { PtyProcess, SpawnPty, SpawnPtyOptions } from "./pty.js";
 
-// `@xterm/headless` é um bundle CommonJS: o import nomeado não resolve em ESM.
-const { Terminal } = xtermHeadless;
-type Term = InstanceType<typeof Terminal>;
-
-const COLS = 120;
-const ROWS = 40;
-/** Quantas linhas da tela renderizada voltam no máximo. */
-const MAX_LINES = 60;
-const PROMPT_MARK = "❯";
 /**
  * Borda de cima dos diálogos do Claude Code. Na 2.1.292 a tela ociosa não tem `▔`; a borda de `/usage` e `/model` traz
  * `◐ medium · /effort` e continua sendo a do diálogo.
@@ -52,51 +46,12 @@ export const DEFAULT_TIMEOUTS: Omit<SlashTimeouts, "ceilingMs"> = {
 const CEILING_COMPACT_MS = 120_000;
 const CEILING_DEFAULT_MS = 20_000;
 
-/** O que usamos de um pty (o real é o `IPty` do `node-pty`). */
-export interface PtyProcess {
-  onData(cb: (data: string) => void): unknown;
-  onExit(cb: (e: { exitCode: number }) => void): unknown;
-  write(data: string): void;
-  kill(signal?: string): void;
-}
-
-export interface SpawnPtyOptions {
-  name: string;
-  cols: number;
-  rows: number;
-  env: Record<string, string>;
-}
-
-export type SpawnPty = (file: string, args: string[], opts: SpawnPtyOptions) => PtyProcess;
-
 export interface RunSlashInput {
   bgId: string;
   command: SlashCommandName;
   args?: string;
   claudeBin?: string;
   timeouts?: Partial<SlashTimeouts>;
-}
-
-const realSpawnPty: SpawnPty = (file, args, opts) => nodePty.spawn(file, args, opts);
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-/** Linhas do buffer ativo (normal ou alternativo), sem estilo, com espaços do fim cortados. */
-async function renderLines(term: Term): Promise<string[]> {
-  await new Promise<void>((r) => { term.write("", r); }); // espera o parser consumir o que já chegou
-  const buf = term.buffer.active;
-  const out: string[] = [];
-  for (let i = 0; i < buf.length; i++) out.push(buf.getLine(i)?.translateToString(true) ?? "");
-  return out;
-}
-
-/** Tira as linhas vazias das pontas e fica com as últimas `MAX_LINES`. */
-function toScreen(lines: string[]): string {
-  let end = lines.length;
-  while (end > 0 && (lines[end - 1] ?? "").trim() === "") end--;
-  let start = 0;
-  while (start < end && (lines[start] ?? "").trim() === "") start++;
-  return lines.slice(Math.max(start, end - MAX_LINES), end).join("\n");
 }
 
 /** Texto do diálogo aberto (da última borda `▔` até o fim), ou `undefined` se não há diálogo visível. */
@@ -107,14 +62,6 @@ export function dialogRegion(lines: string[]): string | undefined {
     return DIALOG_MARKS.some((m) => m.test(region)) ? region : undefined;
   }
   return undefined;
-}
-
-/**
- * O `❯` da caixa de input: logo abaixo da borda `─` da caixa. Não casa o `❯` dos prompts antigos no transcript nem o
- * cursor de seleção dentro de diálogos (`/model`, `/hooks`), que substituem a caixa enquanto estão abertos.
- */
-export function hasInputPrompt(lines: string[]): boolean {
-  return lines.some((l, i) => l.trimStart().startsWith(PROMPT_MARK) && (lines[i - 1] ?? "").trimStart().startsWith("─"));
 }
 
 /** A tela mostra um turno em andamento (spinner ou `esc to interrupt`). */
@@ -136,12 +83,8 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
     ceilingMs: input.command === "compact" ? CEILING_COMPACT_MS : CEILING_DEFAULT_MS,
     ...input.timeouts,
   };
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(cleanEnv(process.env))) if (v !== undefined) env[k] = v;
-  env["TERM"] = "xterm-256color";
-
-  const spawnPty = deps.spawnPty ?? realSpawnPty;
-  const pty = spawnPty(input.claudeBin ?? "claude", ["attach", input.bgId], { name: "xterm-256color", cols: COLS, rows: ROWS, env });
+  const spawnPty = deps.spawnPty ?? await loadSpawnPty();
+  const pty = spawnPty(input.claudeBin ?? "claude", ["attach", input.bgId], { name: "xterm-256color", cols: COLS, rows: ROWS, env: ptyEnv() });
   const term = new Terminal({ cols: COLS, rows: ROWS, allowProposedApi: true });
 
   let lastData = Date.now();
@@ -223,13 +166,7 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
     }
   };
 
-  const send = (data: string): void => {
-    try {
-      pty.write(data);
-    } catch {
-      // pty já fechado
-    }
-  };
+  const send = (data: string): void => { safeWrite(pty, data); };
 
   const detach = async (): Promise<void> => {
     if (exitCode !== undefined) return;
@@ -238,25 +175,7 @@ export async function runSlash(input: RunSlashInput, deps: { spawnPty?: SpawnPty
       send("\x1b");
       await sleep(t.escGapMs);
     }
-    send("\x1a");
-    const exited = await new Promise<boolean>((resolve) => {
-      if (exitCode !== undefined) {
-        resolve(true);
-        return;
-      }
-      const timer = setTimeout(() => { resolve(false); }, t.exitMs);
-      onExited = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-    });
-    if (!exited) {
-      try {
-        pty.kill();
-      } catch {
-        // já saiu
-      }
-    }
+    await detachAndReap(pty, { exited: () => exitCode !== undefined, onExit: (cb) => { onExited = cb; } }, t.exitMs);
   };
 
   try {

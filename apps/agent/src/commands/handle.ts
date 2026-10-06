@@ -1,7 +1,7 @@
 import {
   newEnvelope, type AgentEvent, type PermissionBehavior, type RelayCommand, type SessionInfo, type SlashCommandName,
 } from "@global-agents/protocol";
-import type { InboxTarget } from "../claude/inject.js";
+import { InboxFormatError, type InboxTarget } from "../claude/inject.js";
 import { BUSY_TEXT, SLASH_WHILE_BUSY } from "../claude/slash-rules.js";
 import type { SessionRegistry } from "../claude/registry.js";
 import type { SpawnInput } from "../claude/spawn.js";
@@ -18,11 +18,18 @@ const NO_PERMISSIONS = "permissões ainda não suportadas";
 const PERMISSION_GONE = "pedido de permissão não encontrado ou já resolvido";
 const SLASH_INTERACTIVE = "essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg";
 const SLASH_RUNNING = "já há um comando do Claude rodando nessa sessão; espere ele terminar";
+const INBOX_CHANGED_INTERACTIVE = "formato do inbox mudou e a sessão é interativa; mande o prompt pelo terminal";
+const COMPAT_WARNING = "usando modo compatível: formato do inbox mudou";
 
 export interface SlashInput {
   bgId: string;
   command: SlashCommandName;
   args?: string;
+}
+
+export interface ResumeInput {
+  sessionId: string;
+  text: string;
 }
 
 export interface CommandDeps {
@@ -34,6 +41,10 @@ export interface CommandDeps {
   readRegistry: (pid: number) => SessionRegistry | undefined;
   /** Roda o slash command via `claude attach` (o real é `runSlash` com o `claudeBin` da config). */
   slash: (input: SlashInput) => Promise<{ screen: string }>;
+  /** Fallback quando o inbox muda de formato: `claude --resume` num pty (o real é `resumeViaPty` com o `claudeBin`). */
+  resume: (input: ResumeInput) => Promise<void>;
+  /** Vira `agent.warning` no relay. */
+  onWarning?: (message: string, sessionId: string) => void;
   /** `true` se o pedido existia e foi resolvido agora (T20). */
   onPermissionDecide?: (requestId: string, behavior: PermissionBehavior) => boolean;
 }
@@ -59,6 +70,8 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
   const cache = new Map<string, Promise<AgentEvent>>();
   /** `bgId` com um `claude attach` aberto por nós: uma sessão não aguenta dois clientes anexados. */
   const attached = new Set<string>();
+  /** Sessões que já receberam o aviso de modo compatível nesta execução do agente. */
+  const warned = new Set<string>();
 
   const ack = (commandId: string, result?: Record<string, unknown>): AgentEvent => ({
     ...newEnvelope(deps.machine),
@@ -92,7 +105,25 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
             ...(reg.peerToken !== undefined ? { peerToken: reg.peerToken } : {}),
             ...(reg.peerProtocol !== undefined ? { peerProtocol: reg.peerProtocol } : {}),
           };
-          await deps.inject(target, cmd.text, { name: FROM_NAME });
+          try {
+            await deps.inject(target, cmd.text, { name: FROM_NAME });
+          } catch (e) {
+            if (!(e instanceof InboxFormatError)) throw e;
+            // O formato do fio mudou: só sessões em background têm o caminho humano `claude --resume`.
+            if (s.bgId === undefined) throw new CommandError(INBOX_CHANGED_INTERACTIVE);
+            if (attached.has(s.bgId)) throw new CommandError(SLASH_RUNNING);
+            if (!warned.has(s.sessionId)) {
+              warned.add(s.sessionId);
+              deps.onWarning?.(COMPAT_WARNING, s.sessionId);
+            }
+            const bgId = s.bgId;
+            attached.add(bgId);
+            try {
+              await deps.resume({ sessionId: s.sessionId, text: cmd.text });
+            } finally {
+              attached.delete(bgId);
+            }
+          }
           return ack(cmd.commandId);
         }
         case "session.create": {

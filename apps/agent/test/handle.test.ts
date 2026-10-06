@@ -1,9 +1,9 @@
 import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo, type SlashCommandName } from "@global-agents/protocol";
 import { describe, expect, it, vi } from "vitest";
-import type { InboxTarget } from "../src/claude/inject.js";
+import { InboxFormatError, type InboxTarget } from "../src/claude/inject.js";
 import type { SessionRegistry } from "../src/claude/registry.js";
 import type { SpawnInput } from "../src/claude/spawn.js";
-import { createCommandHandler, type CommandDeps, type SlashInput } from "../src/commands/handle.js";
+import { createCommandHandler, type CommandDeps, type ResumeInput, type SlashInput } from "../src/commands/handle.js";
 
 const MACHINE = "leo/fedora";
 const BG: SessionInfo = { sessionId: "s-bg", cwd: "/p", name: "bg", kind: "background", pid: 111, bgId: "a1b2c3d4" };
@@ -13,6 +13,7 @@ const NOPID: SessionInfo = { sessionId: "s-nopid", cwd: "/p", name: "x", kind: "
 const REG: Record<number, SessionRegistry> = {
   111: { pid: 111, sessionId: "s-bg", messagingSocketPath: "/run/cc/111.sock", peerToken: "tok-secreto", peerProtocol: 1 },
   222: { pid: 222, sessionId: "s-int", messagingSocketPath: "/run/cc/222.sock" },
+  333: { pid: 333, sessionId: "s-busy", messagingSocketPath: "/run/cc/333.sock", peerProtocol: 1 },
 };
 
 function deps(over: Partial<CommandDeps> = {}) {
@@ -25,6 +26,8 @@ function deps(over: Partial<CommandDeps> = {}) {
     stop: vi.fn<(b: string) => Promise<void>>(() => Promise.resolve()),
     readRegistry: vi.fn((pid: number) => REG[pid]),
     slash: vi.fn<(i: SlashInput) => Promise<{ screen: string }>>(() => Promise.resolve({ screen: "Version: 2.1.292" })),
+    resume: vi.fn<(i: ResumeInput) => Promise<void>>(() => Promise.resolve()),
+    onWarning: vi.fn<(message: string, sessionId: string) => void>(),
     ...over,
   };
   return d;
@@ -114,6 +117,74 @@ describe("session.slash", () => {
     expect(await first).toMatchObject({ type: "command.ack" });
     expect(await h(slashCmd("c3", "s-bg", "cost"))).toMatchObject({ type: "command.ack" });
     expect(d.slash).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("session.send com formato do inbox mudado (fallback por pty)", () => {
+  const formatChanged = () => vi.fn(() => Promise.reject(new InboxFormatError("protocolo de inbox não suportado (peerProtocol 2)")));
+  const WARNING = "usando modo compatível: formato do inbox mudou";
+
+  it("sessão em background → resume({ sessionId, text }), warning e ack", async () => {
+    const d = deps({ inject: formatChanged() });
+    const ev = await createCommandHandler(d)(send("c1", "s-bg", "faz isso"));
+    expect(d.resume).toHaveBeenCalledWith({ sessionId: "s-bg", text: "faz isso" });
+    expect(d.onWarning).toHaveBeenCalledWith(WARNING, "s-bg");
+    expect(ev).toMatchObject({ type: "command.ack", commandId: "c1" });
+    expectValid(ev);
+  });
+
+  it("warning uma vez por sessão: dois envios na mesma sessão avisam uma vez; outra sessão avisa de novo", async () => {
+    const d = deps({ inject: formatChanged() });
+    const h = createCommandHandler(d);
+    await h(send("c1", "s-bg"));
+    await h(send("c2", "s-bg"));
+    expect(d.onWarning).toHaveBeenCalledTimes(1);
+    await h(send("c3", "s-busy"));
+    expect(d.onWarning).toHaveBeenCalledTimes(2);
+    expect(d.onWarning).toHaveBeenLastCalledWith(WARNING, "s-busy");
+    expect(d.resume).toHaveBeenCalledTimes(3);
+  });
+
+  it("sessão interativa → command.error pedindo o terminal, sem resume nem warning", async () => {
+    const d = deps({ inject: formatChanged() });
+    const ev = await createCommandHandler(d)(send("c1", "s-int"));
+    expect(ev).toMatchObject({
+      type: "command.error",
+      reason: "formato do inbox mudou e a sessão é interativa; mande o prompt pelo terminal",
+    });
+    expect(d.resume).not.toHaveBeenCalled();
+    expect(d.onWarning).not.toHaveBeenCalled();
+  });
+
+  it("resume falhando (recusa, node-pty ausente) → command.error com a mensagem, sem token", async () => {
+    const d = deps({
+      inject: formatChanged(),
+      resume: vi.fn(() => Promise.reject(new Error("o Claude recusou o prompt: Your prompt was not sent tok-secreto"))),
+    });
+    const ev = await createCommandHandler(d)(send("c1", "s-bg"));
+    expect(ev).toMatchObject({ type: "command.error", reason: "o Claude recusou o prompt: Your prompt was not sent ***" });
+  });
+
+  it("um attach por vez: resume com um /claude rodando na mesma sessão é recusado", async () => {
+    let release = (): void => undefined;
+    const d = deps({
+      inject: formatChanged(),
+      slash: vi.fn(() => new Promise<{ screen: string }>((r) => { release = () => { r({ screen: "" }); }; })),
+    });
+    const h = createCommandHandler(d);
+    const first = h(slashCmd("c1", "s-bg", "status"));
+    const ev = await h(send("c2", "s-bg"));
+    expect(ev).toMatchObject({ type: "command.error", reason: "já há um comando do Claude rodando nessa sessão; espere ele terminar" });
+    expect(d.resume).not.toHaveBeenCalled();
+    release();
+    await first;
+  });
+
+  it("outros erros do inject não acionam o fallback", async () => {
+    const d = deps({ inject: vi.fn(() => Promise.reject(new Error("inbox da sessão indisponível (ENOENT)"))) });
+    const ev = await createCommandHandler(d)(send("c1", "s-bg"));
+    expect(ev).toMatchObject({ type: "command.error", reason: "inbox da sessão indisponível (ENOENT)" });
+    expect(d.resume).not.toHaveBeenCalled();
   });
 });
 
