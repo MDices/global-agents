@@ -46,7 +46,7 @@ Todos os comandos abaixo são executados **na VPS** (`ssh ubuntu@<ip-da-vps>`), 
    ```
 3. **Diretório de dados** com o dono certo (o relay roda como uid 1000):
    ```bash
-   install -d -o 1000 -g 1000 data
+   sudo install -d -o 1000 -g 1000 data
    ```
 4. **Firewall** (idempotente; insere a regra da 8443 antes do `REJECT` final do `INPUT`, sem mexer nas demais):
    ```bash
@@ -103,15 +103,16 @@ Requisitos: Node.js ≥ 24, pnpm, Git, Claude Code já logado.
 
 ```bash
 git clone <url-do-repositorio> ~/dev/global-agents && cd ~/dev/global-agents
-pnpm install && pnpm --filter @global-agents/agent build
-export GLOBAL_AGENTS_TOKEN='<token do machine add>'     # evita o token no histórico do shell
+pnpm install && pnpm --filter '@global-agents/agent...' build
+read -rsp 'token: ' GLOBAL_AGENTS_TOKEN; echo; export GLOBAL_AGENTS_TOKEN   # não fica no histórico do shell
 node apps/agent/dist/cli.js install \
   --relay wss://<ip-da-vps>:8443/ws \
   --fingerprint '<AA:BB:…>' \
   --project ~/dev/meu-projeto \
   --service
+unset GLOBAL_AGENTS_TOKEN
 ```
-(`--token <token>` também funciona; `--project` pode repetir.) Isso grava a config em `~/.global-agents`, copia os scripts de hook e instala os hooks em `~/.claude/settings.json`.
+(`--token <token>` também funciona, mas fica no histórico do shell e aparece no `ps`; `--project` pode repetir.) Isso grava a config em `~/.global-agents`, copia os scripts de hook e instala os hooks em `~/.claude/settings.json`.
 
 O `--service` grava a unidade systemd de usuário e **imprime** os comandos para ativá-la (`install` sem `--service` só grava config e hooks; reinstalar mantém o que não foi passado).
 Rode os comandos `systemctl --user …` e `loginctl enable-linger …` que ele imprimir (o linger mantém o agente de pé sem sessão aberta). Sem `--service`, use `node apps/agent/dist/cli.js run` num terminal.
@@ -139,7 +140,8 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 
 | Sintoma | O que fazer |
 |---|---|
-| **Agente fora do ar** / sessão não aparece | `status` diz "não está rodando"? Suba com `systemctl --user start global-agents` (ou `run` num terminal). Os hooks falham em silêncio e o Claude segue normal; o que aconteceu enquanto o agente estava fora é enviado quando ele volta. |
+| **Agente fora do ar** / sessão não aparece | `status` diz "não está rodando"? Suba com `systemctl --user start global-agents` (ou `run` num terminal). Com o agente fora, o hook falha o POST em 2 s e sai 0, então o Claude segue normal; um `PermissionRequest` sem agente não imprime nada e o prompt de permissão fica no terminal. |
+| **`peerProtocol` ≠ 1** | O agente cai no modo compatível (fallback por PTY) e mostra um aviso (`agent.warning`) na thread. Atualize o Claude Code/agente se persistir. |
 | **VPS fora do ar** | O agente guarda os eventos em disco e os reenvia em ordem na volta. Confira `docker compose ps` e `docker compose logs relay`. Comandos para máquina offline ficam 1 h na fila. |
 | **Fingerprint não confere** (o agente recusa o certificado) | O certificado mudou (`data/` apagado) ou há alguém no meio do caminho. Confirme com `docker compose exec relay node dist/cli.js fingerprint`; se for o seu relay, reinstale o agente com o fingerprint novo (`install … --fingerprint`). |
 | **401 / token recusado** | Token errado ou máquina não registrada. `machine list` na VPS; gere outro com `machine add <nome> --force` e rode `install` de novo no agente. |

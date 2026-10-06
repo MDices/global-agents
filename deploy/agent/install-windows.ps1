@@ -45,7 +45,7 @@ if (-not $SkipBuild) {
   Push-Location $repo
   try {
     Invoke-Native 'pnpm install' { pnpm install }
-    Invoke-Native 'pnpm build' { pnpm --filter '@global-agents/agent' build }
+    Invoke-Native 'pnpm build' { pnpm --filter '@global-agents/agent...' build }
   } finally { Pop-Location }
 }
 if (-not (Test-Path $cli)) { throw "não achei $cli; rode sem -SkipBuild" }
