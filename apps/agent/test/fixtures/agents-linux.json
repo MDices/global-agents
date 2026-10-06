@@ -1,0 +1,32 @@
+[
+  {
+    "id": "dc63267c",
+    "sessionId": "1f0a9c2d-4b7e-4e1d-9c2d-3a5b8e7f6d10",
+    "cwd": "/home/leonardo/dev/work/global-agents",
+    "kind": "background",
+    "startedAt": "2026-10-06T12:01:44.512Z",
+    "name": "revisao-protocolo",
+    "status": "idle",
+    "state": "blocked"
+  },
+  {
+    "sessionId": "4b1e9a2c-7d3f-4e8a-b6c5-0f2d1e3a4b5c",
+    "cwd": "/home/leonardo/dev/work/cdt-gestai",
+    "kind": "interactive",
+    "startedAt": "2026-10-06T11:47:09.033Z",
+    "pid": 2172608,
+    "name": "correcoes-bugs",
+    "status": "busy"
+  },
+  {
+    "id": "85285a68",
+    "sessionId": "85285a68-454d-45d5-aa79-4c7a4cd594d4",
+    "cwd": "/home/leonardo/dev/work/global-agents",
+    "kind": "background",
+    "startedAt": "2026-10-06T12:10:21.870Z",
+    "name": "spike-permissoes",
+    "status": "waiting",
+    "state": "blocked",
+    "waitingFor": "permission prompt"
+  }
+]
