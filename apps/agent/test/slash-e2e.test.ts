@@ -25,9 +25,9 @@ describe.skipIf(!E2E)("slash e2e (real)", () => {
       if (process.env["GLOBAL_AGENTS_E2E_PRINT"] === "1") console.log(screen);
       expect(screen).toMatch(/2\.1\.|Status/);
       expect(screen).not.toContain("\x1b");
-      // Ctrl+Z desanexou sem parar a sessão.
-      const after = await runClaude(["agents", "--json"]).catch(() => undefined);
-      if (after !== undefined && after.code === 0) expect(after.stdout).toContain(bgId);
+      // Ctrl+Z desanexou sem parar a sessão: ela continua no inventário.
+      await new Promise((r) => setTimeout(r, 2_500)); // deixa o inventário (poll de 1 s) ver o estado pós-Ctrl+Z
+      await inventory.waitFor((s) => s.bgId === id, 5_000);
     } finally {
       inventory.stop();
       if (bgId !== undefined) {
