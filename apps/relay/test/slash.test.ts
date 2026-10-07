@@ -206,10 +206,16 @@ describe("SLASH_COMMANDS", () => {
   it("define /novo, /sessoes, /parar, /filtro e /claude com as opções combinadas", () => {
     expect(SLASH_COMMANDS.map((c) => c.name)).toEqual(["novo", "sessoes", "parar", "filtro", "claude"]);
     const novo = SLASH_COMMANDS[0];
-    expect(novo?.options?.map((o) => o.name)).toEqual(["prompt", "projeto", "modo", "criar"]);
-    expect(novo?.options?.find((o) => o.name === "criar")).toMatchObject({
-      type: 5, description: "Cria a pasta dentro da raiz dev se ela não existir",
+    expect(novo?.options?.map((o) => o.name)).toEqual(["prompt", "projeto", "nova_pasta", "modo"]);
+    expect(novo?.options?.find((o) => o.name === "projeto")).toMatchObject({
+      type: 3, autocomplete: true, description: "Pasta existente (sugerida, relativa à pasta dev ou absoluta). Padrão: a pasta dev",
     });
+    const nova = novo?.options?.find((o) => o.name === "nova_pasta");
+    expect(nova).toMatchObject({
+      type: 3, description: "Nome da pasta nova, criada dentro da pasta dev (ex.: meu-app ou clientes/app)",
+    });
+    expect(nova).not.toHaveProperty("autocomplete");
+    expect(novo?.options?.find((o) => o.name === "prompt")).toMatchObject({ required: true });
     for (const o of novo?.options ?? []) expect(o.description.length).toBeLessThanOrEqual(100);
     expect(JSON.stringify(novo)).toContain("\"max_length\":4000");
     expect(JSON.stringify(novo)).toContain("\"autocomplete\":true");
@@ -288,6 +294,32 @@ describe("/novo", () => {
     expect(db.sessions.get("sess-1")?.bgId).toBe("b91e04d7");
     expect(i.edits).toEqual([{ content: `✅ Sessão criada: <#${threadId}>` }]);
     expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: CH, name: "🟢 roda-os-testes" }]);
+  });
+
+  it("evento antes do ack: o cabeçalho é atualizado com bgId, nome e a 'sessão em background'", async () => {
+    const i = command("novo", { prompt: "oi" });
+    await slash.onInteraction(i);
+    // o primeiro status chega antes do ack: a thread nasce só com o que o evento sabe (nome de pasta, sem bgId)
+    hub.emit("event", M, ev("session.status", { sessionId: "sess-h", name: "CDT", cwd: "/home/leonardo/dev/CDT", state: "working" }));
+    await router.idle();
+    const first = port.of("postEmbed")[0]?.embed;
+    expect(first?.title).toBe("Sessão CDT");
+    expect(first?.footer).toContain("sessão interativa");
+    expect(first?.fields.map((f) => f.name)).not.toContain("Abrir no terminal");
+    await ackOf(i.id, { sessionId: "sess-h", bgId: "b7f3c2a9", cwd: "/home/leonardo/dev/CDT" });
+    await settle();
+    const edits = port.of("editCard");
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.messageId).toBe(db.sessions.get("sess-h")?.headerMessageId);
+    expect(edits[0]?.card.buttons).toEqual([]);
+    expect(edits[0]?.card.embed.title).toBe("Sessão oi");
+    expect(edits[0]?.card.embed.footer).toContain("sessão em background");
+    expect(edits[0]?.card.embed.fields).toContainEqual({ name: "Abrir no terminal", value: "`claude attach b7f3c2a9`", inline: false });
+    // status com o nome de pasta do hook não desfaz o título nem edita de novo
+    hub.emit("event", M, ev("session.status", { sessionId: "sess-h", name: "CDT", cwd: "/home/leonardo/dev/CDT", state: "waiting" }));
+    await router.idle();
+    await settle();
+    expect(port.of("editCard")).toHaveLength(1);
   });
 
   it("ack sem sessionId → erro na resposta", async () => {
@@ -418,11 +450,41 @@ describe("/novo com pastas dev", () => {
     expect(lastCmd()).toMatchObject({ cwd: "/etc" });
   });
 
-  it("criar:true vira create: true no comando; criar:false não manda o campo", async () => {
+  it("nova_pasta vira cwd + create: true; projeto manda cwd sem create", async () => {
     await use(helloDev([], [ROOT]));
-    await slash.onInteraction(command("novo", { prompt: "oi", projeto: "app-novo", criar: true }));
-    expect(lastCmd()).toMatchObject({ cwd: "app-novo", create: true });
-    await slash.onInteraction(command("novo", { prompt: "oi", projeto: "app-novo", criar: false }));
+    await slash.onInteraction(command("novo", { prompt: "oi", nova_pasta: " clientes/app " }));
+    expect(lastCmd()).toMatchObject({ cwd: "clientes/app", create: true });
+    await slash.onInteraction(command("novo", { prompt: "oi", projeto: "app-novo" }));
+    expect(lastCmd()).toMatchObject({ cwd: "app-novo" });
+    expect(lastCmd()).not.toHaveProperty("create");
+  });
+
+  it("projeto e nova_pasta juntos → erro efêmero e nada enviado", async () => {
+    await use(helloDev([], [ROOT]));
+    const i = command("novo", { prompt: "oi", projeto: "a", nova_pasta: "b" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(hub.sent).toEqual([]);
+    expect(i.replies).toEqual([{
+      view: { content: "use projeto (pasta existente) ou nova_pasta (pasta a criar), não os dois" }, ephemeral: true,
+    }]);
+  });
+
+  it("nova_pasta inválida (controle ou longa demais) → recusada no relay", async () => {
+    await use(helloDev([], [ROOT]));
+    for (const nova_pasta of ["a\nb", "a".repeat(1025)]) {
+      const i = command("novo", { prompt: "oi", nova_pasta });
+      await slash.onInteraction(i);
+      await settle();
+      expect(i.replies[0]?.view.content).toContain("nova_pasta inválida");
+    }
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("nova_pasta só com espaços não conta como informada (cai no padrão, sem create)", async () => {
+    await use(helloDev([], [ROOT]));
+    await slash.onInteraction(command("novo", { prompt: "oi", nova_pasta: "   " }));
+    expect(lastCmd()).toMatchObject({ cwd: ROOT });
     expect(lastCmd()).not.toHaveProperty("create");
   });
 
@@ -467,28 +529,29 @@ describe("/novo com pastas dev", () => {
     expect(hub.sent).toEqual([]);
   });
 
-  it("agente antigo com criar:true → recusa explicando que precisa atualizar", async () => {
-    const i = command("novo", { prompt: "oi", projeto: PROJECTS[0] ?? "", criar: true });
+  it("agente antigo com nova_pasta → recusa explicando que precisa atualizar", async () => {
+    const i = command("novo", { prompt: "oi", nova_pasta: "app-novo" });
     await slash.onInteraction(i);
     await settle();
     expect(hub.sent).toEqual([]);
     expect(i.replies[0]?.view.content).toContain("atualize o agente");
+    expect(i.replies[0]?.view.content).toContain("nova_pasta");
   });
 
   it("o ack com cwd resolvido pelo agente vira o cwd da thread", async () => {
     await use(helloDev([], [ROOT]));
     const spy = vi.spyOn(threads, "ensureThread");
-    const i = command("novo", { prompt: "oi", projeto: "work/app-novo", criar: true });
+    const i = command("novo", { prompt: "oi", nova_pasta: "work/app-novo" });
     await slash.onInteraction(i);
     await ackOf(i.id, { sessionId: "sess-9", bgId: "b9", cwd: `${ROOT}/work/app-novo` });
     await settle();
     expect(spy).toHaveBeenCalledWith(M, expect.objectContaining({ sessionId: "sess-9", cwd: `${ROOT}/work/app-novo` }));
   });
 
-  it("offline: criar e o caminho relativo sobrevivem à fila e ao reenvio", async () => {
+  it("offline: nova_pasta (cwd + create) sobrevive à fila e ao reenvio", async () => {
     await use(helloDev([], [ROOT]));
     hub.online.delete(M);
-    const i = command("novo", { prompt: "oi", projeto: "app-novo", criar: true });
+    const i = command("novo", { prompt: "oi", nova_pasta: "app-novo" });
     await slash.onInteraction(i);
     await settle();
     expect(hub.sent).toEqual([]);
@@ -517,10 +580,10 @@ describe("/novo com pastas dev", () => {
       await settle();
       expect(before.choices[0]?.map((c) => c.value)).toEqual(["/opt/legado", ROOT]);
       expect(after.choices[0]?.map((c) => c.value)).toEqual(["/opt/legado", ROOT, `${ROOT}/gestai`, `${ROOT}/work`, `${ROOT}/work/app`]);
-      expect(filtered.choices[0]?.map((c) => c.value)).toEqual(["WORK", `${ROOT}/work`, `${ROOT}/work/app`]);
+      expect(filtered.choices[0]?.map((c) => c.value)).toEqual([`${ROOT}/work`, `${ROOT}/work/app`]);
     });
 
-    it("texto que não bate com nada vira a primeira (e única) opção; texto igual a uma sugestão não ecoa", async () => {
+    it("sem eco do texto digitado, nem para texto igual a uma sugestão; vazio lista tudo", async () => {
       await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
       const novo = autocomplete("app-novo");
       await slash.onInteraction(novo);
@@ -528,32 +591,27 @@ describe("/novo com pastas dev", () => {
       await slash.onInteraction(igual);
       const vazio = autocomplete("   ");
       await slash.onInteraction(vazio);
+      const absoluto = autocomplete("/opt/outro");
+      await slash.onInteraction(absoluto);
       await settle();
-      expect(novo.choices).toEqual([[{ name: "app-novo", value: "app-novo" }]]);
+      expect(novo.choices).toEqual([[]]);
+      expect(absoluto.choices).toEqual([[]]);
       expect(igual.choices).toEqual([[{ name: `${ROOT}/gestai`, value: `${ROOT}/gestai` }]]);
       expect(vazio.choices[0]?.map((c) => c.value)).toEqual([ROOT, `${ROOT}/gestai`]);
     });
 
-    it("até 25 opções, valores ≤ 100 caracteres (eco longo demais não entra)", async () => {
+    it("até 25 opções, valores ≤ 100 caracteres, sem eco", async () => {
       const many = Array.from({ length: 40 }, (_, k) => `${ROOT}/p${k}`);
       await use(helloDev([], [ROOT]), projectsEv([ROOT], [...many, `${ROOT}/${"x".repeat(120)}`]));
       const a = autocomplete("p");
       await slash.onInteraction(a);
-      const longo = autocomplete("y".repeat(101));
-      await slash.onInteraction(longo);
       await settle();
       expect(a.choices[0]).toHaveLength(25);
-      expect(a.choices[0]?.[0]).toEqual({ name: "p", value: "p" });
+      expect(a.choices[0]?.[0]).toEqual({ name: `${ROOT}/p0`, value: `${ROOT}/p0` });
       expect(a.choices[0]?.every((c) => c.value.length <= 100)).toBe(true);
-      expect(longo.choices).toEqual([[]]);
     });
 
-    it("eco diferencia maiúsculas no Linux e não no Windows", async () => {
-      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
-      const linux = autocomplete("Gestai");
-      await slash.onInteraction(linux);
-      await settle();
-      expect(linux.choices[0]?.[0]).toEqual({ name: "Gestai", value: "Gestai" });
+    it("o filtro diferencia no Windows só pelo valor da sugestão, sem eco", async () => {
       const W = "C:\\Users\\Leo\\Dev";
       await use(ev("agent.hello", { version: "0.2.0", os: "win32", osUser: "leo", claudeAccount: ACCOUNT, projects: [], devRoots: [W] }),
         projectsEv([W], [`${W}\\Gestai`]));
@@ -561,6 +619,14 @@ describe("/novo com pastas dev", () => {
       await slash.onInteraction(win);
       await settle();
       expect(win.choices).toEqual([[{ name: `${W}\\Gestai`, value: `${W}\\Gestai` }]]);
+    });
+
+    it("nova_pasta não tem autocomplete", async () => {
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
+      const a = autocomplete("gest", ALLOWED, "nova_pasta");
+      await slash.onInteraction(a);
+      await settle();
+      expect(a.choices).toEqual([[]]);
     });
 
     it("sugestão absoluta com mais de 100 caracteres vira relativa à primeira raiz; fora dela, some", async () => {
@@ -571,22 +637,11 @@ describe("/novo com pastas dev", () => {
       await slash.onInteraction(a);
       await settle();
       const rel = `${"a".repeat(45)}/${"b".repeat(45)}`;
-      expect(a.choices).toEqual([[{ name: "bbbb", value: "bbbb" }, { name: rel, value: rel }]]);
+      expect(a.choices).toEqual([[{ name: rel, value: rel }]]);
       const c = autocomplete("cccc");
       await slash.onInteraction(c);
       await settle();
-      expect(c.choices[0]?.map((x) => x.value)).toEqual(["cccc"]); // só o eco; a sugestão longa fora da raiz some
-    });
-
-    it("agente novo sem raiz: não ecoa relativo (o agente recusaria), mas ecoa absoluto", async () => {
-      await use(helloDev(["/opt/legado"], []));
-      const rel = autocomplete("app-novo");
-      await slash.onInteraction(rel);
-      const abs = autocomplete("/opt/outro");
-      await slash.onInteraction(abs);
-      await settle();
-      expect(rel.choices).toEqual([[]]);
-      expect(abs.choices[0]?.[0]).toEqual({ name: "/opt/outro", value: "/opt/outro" });
+      expect(c.choices).toEqual([[]]); // a sugestão longa fora da raiz some
     });
 
     it("agente antigo não ecoa o texto digitado (só aceita os projetos do hello)", async () => {
