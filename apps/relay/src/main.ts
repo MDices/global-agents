@@ -152,7 +152,7 @@ export async function startRelay(cfg: RelayConfig, deps: RelayDeps = {}): Promis
     if (client !== undefined) {
       const discord = client;
       registerSlashCommands(discord, cfg.guildId).then(
-        () => { log("info", "discord: comandos /novo, /sessoes, /parar e /filtro registrados no servidor"); },
+        () => { log("info", "discord: comandos /novo, /sessoes, /parar, /filtro e /claude registrados no servidor"); },
         (e: unknown) => { log("error", `discord: falha ao registrar os slash commands: ${(e as Error).message}`); },
       );
       const onInteraction = (interaction: Interaction): void => {
