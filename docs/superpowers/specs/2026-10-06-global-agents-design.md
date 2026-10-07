@@ -122,8 +122,10 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 
 ### 5.5 Configuração
 
-`~/.global-agents/config.json`: `relayUrl`, `machineName`, `token`, `projects[]`, `devRoots[]` (pastas raiz de
-desenvolvimento, absolutas; padrão `[]`), `port` (padrão 48476). CLI:
+`~/.global-agents/config.json`: `relayUrl`, `machineName`, `token`, `projects[]` (opcional e secundária quando há
+raiz), `devRoots[]` (pastas raiz de desenvolvimento por máquina; padrão `[]`; normalizadas ao gravar: `~` expandido,
+absolutas, no Windows `C:/dev` e `c:\Dev` viram `C:\dev`/`C:\Dev` nativos; o agente normaliza de novo ao subir, para
+config editada à mão), `port` (padrão 48476). CLI:
 `global-agents install | uninstall | run | status | doctor`. `install --dev-root <dir>` (repetível) grava as pastas dev;
 com config já gravada, `--relay`, token e `--fingerprint` são opcionais (usa os salvos), e `--project`/`--dev-root`
 substituem a lista correspondente só quando passados. `doctor` roda os checks dos spikes (versão do Claude,
@@ -161,8 +163,11 @@ substituem a lista correspondente só quando passados. `doctor` roda os checks d
     pelo texto, até 25; o texto digitado vai como primeira opção quando não é exatamente uma sugestão), um caminho
     relativo à primeira pasta dev (`gestai`, `work/app-novo`) ou absoluto. O relay só confere formato (não vazio, sem
     caractere de controle, até 1024); quem decide é o agente.
-  - Sem `projeto`: primeiro projeto explícito; senão a primeira pasta dev; senão "esta máquina não tem pasta dev; rode
-    global-agents install --dev-root <pasta>".
+  - Sem `projeto`: a própria primeira pasta dev (mesmo havendo projetos explícitos); senão o primeiro projeto
+    explícito; senão "esta máquina não tem pasta dev; rode …" com o comando do `os` da máquina: Linux/macOS
+    `global-agents install --dev-root ~/dev`, Windows `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`.
+  - Objetivo: informada a raiz uma vez, nenhum projeto precisa ser cadastrado; qualquer subpasta dela vale, inclusive
+    digitada à mão e mais funda que a varredura.
   - `criar:true` vira `create: true`. No agente (fronteira de confiança): permitido se está na lista `projects` ou dentro
     de uma pasta dev, medido pelo `realpath` do ancestral existente mais próximo contra o `realpath` da raiz (sem
     diferenciar maiúsculas no Windows; symlink que sai da raiz é negado; a própria raiz vale). Pasta inexistente só é

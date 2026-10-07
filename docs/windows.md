@@ -21,7 +21,7 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
    ```powershell
    .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint "<fp>" -DevRoot C:\dev
    ```
-   `-DevRoot` (uma ou mais pastas, separadas por vírgula: `-DevRoot C:\dev,D:\trabalho`) define as **pastas raiz de desenvolvimento**: tudo dentro delas pode virar sessão pelo `/novo`, inclusive uma pasta nova com `criar:true`. `-Project C:\dev\meu-projeto` continua aceito para projetos avulsos fora das pastas dev.
+   `-DevRoot` (uma ou mais pastas, separadas por vírgula: `-DevRoot C:\dev,D:\trabalho`) define as **pastas raiz de desenvolvimento**: tudo dentro delas pode virar sessão pelo `/novo`, inclusive uma pasta nova com `criar:true`, sem cadastrar projeto nenhum. Aceita `C:\dev`, `C:/dev` ou `c:\Dev` (e `~\dev` para o seu perfil); a config grava o caminho absoluto no formato do Windows. `-Project C:\dev\meu-projeto` continua aceito, opcional, para projetos avulsos fora das pastas dev.
    Se a política de execução bloquear: `powershell -ExecutionPolicy Bypass -File .\deploy\agent\install-windows.ps1 ...`.
    Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` a partir de um XML (`schtasks /Create /TN global-agents /XML ... /F`; gatilho no logon do seu usuário, token interativo, nível limitado, sem limite de tempo, reinício em falha, sem condição de bateria), inicia o agente e roda o `doctor`.
    O token é pedido de forma oculta (não vai para o histórico do PowerShell); também pode vir da variável `GLOBAL_AGENTS_TOKEN`.
@@ -31,7 +31,7 @@ Não é preciso administrador: a tarefa é do seu usuário e roda com privilégi
 
 ## Pastas dev e `/novo`
 
-No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e repositórios git das pastas dev), um caminho relativo à primeira pasta dev (`gestai`, `work\app-novo`) ou um caminho absoluto. O agente só abre sessão dentro de uma pasta dev (comparando o caminho real, sem diferenciar maiúsculas) ou num `-Project`; pasta inexistente só é criada com `criar:true`. Detalhes, inclusive a confiança do Claude Code em pastas novas, em [install.md](./install.md#pastas-dev---dev-root).
+No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e repositórios git das pastas dev), um caminho relativo à primeira pasta dev (`gestai`, `work\app-novo`) ou um caminho absoluto. O agente só abre sessão dentro de uma pasta dev (comparando o caminho real, sem diferenciar maiúsculas) ou num `-Project`; pasta inexistente só é criada com `criar:true`. Sem `projeto`, a sessão abre na própria pasta dev. Sem pasta dev, o `/novo` responde com o comando `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`. Detalhes, inclusive a confiança do Claude Code em pastas novas, em [install.md](./install.md#pastas-dev---dev-root).
 
 Para acrescentar ou trocar as pastas dev depois, sem token e sem rodar o instalador inteiro (a config já gravada fornece relay, token e fingerprint):
 ```powershell
