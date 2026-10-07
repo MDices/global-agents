@@ -7,7 +7,7 @@ import { ThreadRegistry } from "../src/discord/threads.js";
 import {
   CONFIRM_TIMEOUT_MS,
   CREATING_TEXT,
-  NO_DEV_ROOT_TEXT,
+  noDevRootText,
   NO_PROJECTS_TEXT,
   NOT_ALLOWED_TEXT,
   NOT_MACHINE_CHANNEL_TEXT,
@@ -426,23 +426,33 @@ describe("/novo com pastas dev", () => {
     expect(lastCmd()).not.toHaveProperty("create");
   });
 
-  it("sem projeto: primeiro projeto explícito; sem explícito, a primeira pasta dev", async () => {
+  it("sem projeto: a primeira pasta dev, mesmo havendo projetos explícitos; sem raiz, o primeiro explícito", async () => {
     await use(helloDev(["/opt/legado"], [ROOT, "/srv/outra"]));
     await slash.onInteraction(command("novo", { prompt: "oi" }));
-    expect(lastCmd()).toMatchObject({ cwd: "/opt/legado" });
-    await use(helloDev([], [ROOT, "/srv/outra"]));
-    await slash.onInteraction(command("novo", { prompt: "oi" }));
     expect(lastCmd()).toMatchObject({ cwd: ROOT });
+    await use(helloDev(["/opt/legado"], []));
+    await slash.onInteraction(command("novo", { prompt: "oi" }));
+    expect(lastCmd()).toMatchObject({ cwd: "/opt/legado" });
   });
 
-  it("sem projeto, sem explícito e sem pasta dev → erro novo com a instrução do --dev-root", async () => {
+  it("sem projeto, sem pasta dev e sem explícito → erro com o comando do Linux", async () => {
     await use(helloDev([], []));
     const i = command("novo", { prompt: "oi" });
     await slash.onInteraction(i);
     await settle();
     expect(hub.sent).toEqual([]);
-    expect(i.replies).toEqual([{ view: { content: NO_DEV_ROOT_TEXT }, ephemeral: true }]);
-    expect(NO_DEV_ROOT_TEXT).toBe("esta máquina não tem pasta dev; rode global-agents install --dev-root <pasta>");
+    expect(i.replies).toEqual([{ view: { content: "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`" }, ephemeral: true }]);
+  });
+
+  it("máquina Windows sem pasta dev → erro com o comando do instalador PowerShell", async () => {
+    await use(ev("agent.hello", { version: "0.2.0", os: "win32", osUser: "leo", claudeAccount: ACCOUNT, projects: [], devRoots: [] }));
+    const i = command("novo", { prompt: "oi" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies[0]?.view.content).toBe("esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
+    expect(noDevRootText("win32")).toBe(i.replies[0]?.view.content);
+    expect(noDevRootText("darwin")).toBe(noDevRootText("linux"));
+    expect(noDevRootText(null)).toBe(noDevRootText("linux"));
   });
 
   it("projeto com caractere de controle ou longo demais → recusado no relay", async () => {

@@ -17,7 +17,12 @@ export const NOT_ALLOWED_TEXT = "sem permissão";
 export const NOT_MACHINE_CHANNEL_TEXT = "use este comando no canal de uma máquina";
 export const NOT_SESSION_THREAD_TEXT = "use este comando dentro da thread de uma sessão";
 export const NO_PROJECTS_TEXT = "esta máquina não informou projetos; rode global-agents install --project <pasta>";
-export const NO_DEV_ROOT_TEXT = "esta máquina não tem pasta dev; rode global-agents install --dev-root <pasta>";
+/** Sem pasta dev: o comando certo para o sistema da máquina (o `os` do último hello; Linux quando desconhecido). */
+export function noDevRootText(os: string | null): string {
+  return os === "win32"
+    ? "esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`"
+    : "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`";
+}
 const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar criar:true";
 export const OFFLINE_TEXT = "máquina offline; o pedido fica na fila por 1 h";
 export const CREATING_TEXT = "criando sessão…";
@@ -276,8 +281,8 @@ const stopButtons = (id: string, disabled: boolean): SlashButton[] => [
  *   id da interação/mensagem. No ack, a thread nasce com o `bgId` e a resposta vira o link dela. O token de uma
  *   interação vale 15 min: se o pedido ficar mais que isso na fila, a thread nasce mesmo assim e a edição falha (log).
  * - `projeto` aceita um item sugerido, um caminho relativo (à primeira pasta dev) ou absoluto; o relay só confere o
- *   formato e quem decide é o agente (contenção nas pastas dev). Sem `projeto`: o primeiro projeto explícito, senão a
- *   primeira pasta dev. `criar:true` vira `create` (o agente cria a pasta dentro da pasta dev). Máquina com agente
+ *   formato e quem decide é o agente (contenção nas pastas dev). Sem `projeto`: a primeira pasta dev, senão o primeiro
+ *   projeto explícito, senão o erro com o comando de instalação do sistema da máquina. `criar:true` vira `create` (o agente cria a pasta dentro da pasta dev). Máquina com agente
  *   anterior às pastas dev (hello sem `devRoots`) só aceita os projetos do hello, porque esse agente não confere nada.
  * - `/parar` pede confirmação com botões que valem 60 s; confirmado, manda `session.stop`.
  * - `/filtro` grava `machines.filter_account` e reaplica o tópico do canal; o router silencia a máquina.
@@ -329,8 +334,9 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       if (!projects.includes(cwd)) return { error: `projeto desconhecido nesta máquina: ${cwd}; escolha um dos sugeridos` };
       if (criar) return { error: LEGACY_CREATE_TEXT };
     } else if (typed === "") {
-      const fallback = projects[0] ?? roots[0];
-      if (fallback === undefined) return { error: NO_DEV_ROOT_TEXT };
+      // a própria raiz vem antes dos projetos explícitos (que viram secundários quando há raiz)
+      const fallback = roots[0] ?? projects[0];
+      if (fallback === undefined) return { error: noDevRootText(machine.os) };
       cwd = fallback;
     } else {
       if (!validProject(typed)) return { error: `projeto inválido: use uma linha só, sem caracteres de controle, até ${PROJECT_MAX} caracteres` };
