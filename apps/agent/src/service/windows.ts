@@ -95,30 +95,46 @@ export function schtasksDeleteArgs(): string[] {
   return ["/Delete", "/TN", TASK_NAME, "/F"];
 }
 
-/** Aspas simples do PowerShell: dentro de '...' só a própria aspa simples precisa ser dobrada. */
+/**
+ * Aspas simples do PowerShell: dentro de '...' dobra-se a própria aspa. O PowerShell trata também U+2018, U+2019,
+ * U+201A e U+201B (aspas tipográficas) como aspa simples; cada uma é dobrada com o mesmo caractere.
+ */
 export function psQuote(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`;
+  return `'${s.replace(/['‘’‚‛]/g, (c) => c + c)}'`;
 }
+
+/** Regex (sintaxe igual em .NET e JS) em volta do `cli.js`: começa em início/espaço/aspa e termina em ` run`. */
+export const ORPHAN_PREFIX = "(^|[\\s\\x22])";
+export const ORPHAN_SUFFIX = "\\x22?\\s+run(\\s|$)";
 
 /**
  * Script (PowerShell 5.1 e 7) que encerra os `node.exe` cuja linha de comando tem o `cli.js` desta instalação seguido
  * de ` run`. O `/End` do Agendador derruba só o `conhost` da tarefa: o node filho sobrevive e segura a porta dos hooks.
- * Sem aspas duplas no script, para atravessar o `execFile` sem depender do escape de argumentos do Windows
- * (`\x22` é a aspa dupla na regex: o cli aparece citado na linha de comando da tarefa).
+ * Sem aspas duplas (a aspa é `\x22` na regex) e sem texto em português: a saída é só `found=N alive=PID,PID` em ASCII,
+ * que o TS interpreta (o powershell.exe escreve em OEM, não em UTF-8).
  */
 export function killOrphanNodeScript(cli: string): string {
   return [
-    `$re = [regex]::Escape(${psQuote(cli)}) + '\\x22?\\s+run(\\s|$)'`,
+    `$re = ${psQuote(ORPHAN_PREFIX)} + [regex]::Escape(${psQuote(cli)}) + ${psQuote(ORPHAN_SUFFIX)}`,
     `$alvo = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match $re })`,
     `foreach ($p in $alvo) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }`,
     `$fim = (Get-Date).AddSeconds(5)`,
-    `while ((Get-Date) -lt $fim -and @($alvo | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -gt 0) { Start-Sleep -Milliseconds 200 }`,
-    `Write-Output ('node órfão encerrado: ' + $alvo.Count)`,
+    `do { $vivos = @($alvo | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | ForEach-Object { $_.ProcessId }); if ($vivos.Count -eq 0) { break }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $fim)`,
+    `Write-Output ('found=' + $alvo.Count + ' alive=' + ($vivos -join ','))`,
   ].join("; ");
 }
 
 export function killOrphanNodeArgs(cli: string): string[] {
   return ["-NoProfile", "-NonInteractive", "-Command", killOrphanNodeScript(cli)];
+}
+
+export interface OrphanResult { found: number; alive: number[] }
+
+/** Interpreta a saída `found=N alive=1,2` do script; `undefined` se não reconhecer. */
+export function parseOrphanOutput(out: string): OrphanResult | undefined {
+  const m = /found=(\d+) alive=([\d,]*)/.exec(out);
+  if (m === null) return undefined;
+  return { found: Number(m[1]), alive: (m[2] ?? "").split(",").filter((x) => x !== "").map(Number) };
 }
 
 /** Comando equivalente para colar no PowerShell (modo sem `--apply`). */
@@ -132,7 +148,8 @@ export interface WindowsServiceRun extends TaskOptions {
   userId: string;
   workingDir: string;
   log: (line: string) => void;
-  exec: (file: string, args: string[]) => Promise<void>;
+  /** Devolve a saída padrão (só a do `powershell.exe` é interpretada). */
+  exec: (file: string, args: string[]) => Promise<string | void>;
   /** Grava o XML num arquivo temporário e devolve o caminho e uma função de limpeza. */
   writeTemp: (name: string, data: Buffer) => { path: string; cleanup: () => void };
 }
@@ -150,7 +167,7 @@ export async function runWindowsService(r: WindowsServiceRun): Promise<void> {
     } finally {
       tmp.cleanup();
     }
-    r.log(`tarefa "${TASK_NAME}" registrada para ${r.userId}: o agente inicia no próximo logon, sem janela de console. Para iniciar agora: schtasks /Run /TN ${TASK_NAME}\nse trocar a versão do Node, reexecute 'install --service --apply' para atualizar o caminho do Node na tarefa.`);
+    r.log(`tarefa "${TASK_NAME}" registrada para ${r.userId}: o agente inicia no próximo logon, sem janela de console. Para iniciar agora: schtasks /Run /TN ${TASK_NAME}\nse o agente JÁ estiver rodando, ele não é reiniciado e segue com a config antiga: use o .\\deploy\\agent\\install-windows.ps1, ou rode schtasks /End /TN ${TASK_NAME}, encerre o node.exe antigo (docs/windows.md, 'Solução de problemas') e então schtasks /Run /TN ${TASK_NAME}.\nse trocar a versão do Node, reexecute 'install --service --apply' para atualizar o caminho do Node na tarefa.`);
     return;
   }
   if (!r.apply) {
@@ -159,9 +176,16 @@ export async function runWindowsService(r: WindowsServiceRun): Promise<void> {
   }
   await r.exec("schtasks", schtasksEndArgs()).catch(() => undefined); // não estar rodando não é erro
   // O /End encerra só o conhost; o node filho fica órfão. Falha aqui é aviso, não erro.
-  await r.exec("powershell.exe", killOrphanNodeArgs(r.cli)).catch((e: unknown) => {
+  try {
+    const res = parseOrphanOutput(String((await r.exec("powershell.exe", killOrphanNodeArgs(r.cli))) ?? ""));
+    if (res === undefined) throw new Error("saída inesperada do PowerShell");
+    r.log(`node(s) antigo(s) do agente encerrado(s): ${res.found - res.alive.length}`);
+    if (res.alive.length > 0) {
+      r.log(`aviso: o(s) node(s) PID ${res.alive.join(", ")} não encerrou(aram) em 5 s e segue(m) segurando a porta dos hooks; encerre à mão: Stop-Process -Id ${res.alive.join(",")} -Force (PowerShell, talvez como administrador)`);
+    }
+  } catch (e) {
     r.log(`aviso: não consegui encerrar o node órfão do agente (${e instanceof Error ? e.message : String(e)}); confira com o comando de diagnóstico em docs/windows.md`);
-  });
+  }
   await r.exec("schtasks", schtasksDeleteArgs());
   r.log(`tarefa "${TASK_NAME}" parada e removida`);
 }

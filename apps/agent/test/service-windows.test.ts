@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  TASK_NAME, buildTaskArgs, killOrphanNodeArgs, killOrphanNodeScript, buildTaskXml, encodeTaskXml, runWindowsService, schtasksCreateArgs, schtasksDeleteArgs,
+  TASK_NAME, buildTaskArgs, killOrphanNodeArgs, killOrphanNodeScript, ORPHAN_PREFIX, ORPHAN_SUFFIX, parseOrphanOutput, psQuote, buildTaskXml, encodeTaskXml, runWindowsService, schtasksCreateArgs, schtasksDeleteArgs,
   schtasksEndArgs, serviceBackend, windowsUserId, xmlEscape, type WindowsServiceRun,
 } from "../src/service/windows.js";
 
@@ -110,13 +110,13 @@ describe("runWindowsService", () => {
   });
   it("uninstall com apply faz /End (ignorando falha) e depois /Delete", async () => {
     const calls: string[][] = [];
-    const m = mk({ action: "uninstall", apply: true, exec: async (_f, a) => { calls.push(a); if (a[0] === "/End") throw new Error("não está rodando"); } });
+    const m = mk({ action: "uninstall", apply: true, exec: async (_f, a) => { calls.push(a); if (a[0] === "/End") throw new Error("não está rodando"); return "found=0 alive="; } });
     await runWindowsService(m.run);
     expect(calls).toEqual([schtasksEndArgs(), killOrphanNodeArgs(CLI), schtasksDeleteArgs()]);
   });
   it("uninstall: powershell sem shell, argumentos em array, filtrando pelo cli.js", async () => {
     const calls: Array<[string, string[]]> = [];
-    const m = mk({ action: "uninstall", apply: true, exec: async (f, a) => { calls.push([f, a]); } });
+    const m = mk({ action: "uninstall", apply: true, exec: async (f, a) => { calls.push([f, a]); return "found=1 alive="; } });
     await runWindowsService(m.run);
     expect(calls[1]?.[0]).toBe("powershell.exe");
     expect(calls[1]?.[1].slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
@@ -129,6 +129,22 @@ describe("runWindowsService", () => {
     expect(calls).toEqual(["/End", "powershell.exe", "/Delete"]);
     expect(m.out.join("\n")).toContain("aviso: não consegui encerrar o node órfão");
     expect(m.out.join("\n")).toContain("parada e removida");
+  });
+  it("uninstall: node que não morre em 5 s → aviso com PID e comando manual; conta só os que sumiram", async () => {
+    const calls: string[] = [];
+    const m = mk({ action: "uninstall", apply: true, exec: async (f, a) => { calls.push(f === "schtasks" ? a[0]! : f); return f === "powershell.exe" ? "found=3 alive=4242,77\r\n" : ""; } });
+    await runWindowsService(m.run);
+    const out = m.out.join("\n");
+    expect(out).toContain("encerrado(s): 1");
+    expect(out).toContain("aviso: o(s) node(s) PID 4242, 77");
+    expect(out).toContain("Stop-Process -Id 4242,77 -Force");
+    expect(calls).toEqual(["/End", "powershell.exe", "/Delete"]);
+  });
+  it("install --apply avisa que agente já rodando não é reiniciado", async () => {
+    const m = mk({ apply: true });
+    await runWindowsService(m.run);
+    expect(m.out.join("\n")).toContain("JÁ estiver rodando");
+    expect(m.out.join("\n")).toContain("install-windows.ps1");
   });
   it("uninstall sem apply imprime também o passo do node", async () => {
     const m = mk({ action: "uninstall" });
@@ -144,5 +160,51 @@ describe("killOrphanNodeScript", () => {
     expect(sc).toContain("'C:\\Users\\O''Neil\\cli.js'");
     expect(sc).not.toContain('"');
     expect(sc).toContain("\\x22?\\s+run");
+  });
+});
+
+describe("psQuote", () => {
+  it("dobra a aspa simples ASCII e as tipográficas U+2018/2019/201A/201B", () => {
+    expect(psQuote("O'Neil")).toBe("'O''Neil'");
+    for (const q of ["\u2018", "\u2019", "\u201A", "\u201B"]) expect(psQuote(`O${q}Neil`)).toBe(`'O${q}${q}Neil'`);
+  });
+});
+
+describe("parseOrphanOutput", () => {
+  it("lê found/alive, com ou sem vivos, e rejeita lixo", () => {
+    expect(parseOrphanOutput("found=2 alive=\r\n")).toEqual({ found: 2, alive: [] });
+    expect(parseOrphanOutput("found=2 alive=10,20")).toEqual({ found: 2, alive: [10, 20] });
+    expect(parseOrphanOutput("erro")).toBeUndefined();
+  });
+  it("o script devolve só ASCII", () => {
+    // eslint-disable-next-line no-control-regex
+    expect(/^[\x00-\x7F]*$/.test(killOrphanNodeScript("C:\\x\\cli.js").replace(/C:\\x\\cli\.js/, ""))).toBe(true);
+  });
+});
+
+describe("regex do filtro de node órfão (mesma sintaxe .NET/JS)", () => {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = (cli: string): RegExp => new RegExp(ORPHAN_PREFIX + esc(cli) + ORPHAN_SUFFIX, "i");
+  const cli = "C:\\Users\\Admin\\CDT\\global-agents\\apps\\agent\\dist\\cli.js";
+  const nodeExe = "C:\\Program Files\\nodejs\\node.exe";
+  it("casa a linha real da tarefa, com e sem --config e sem diferenciar maiúsculas", () => {
+    expect(re(cli).test(`"${nodeExe}" "${cli}" run`)).toBe(true);
+    expect(re(cli).test(`"${nodeExe}" "${cli}" run --config "C:\\a b\\c.json"`)).toBe(true);
+    expect(re(cli).test(`"${nodeExe}" "${cli.toUpperCase()}" run`)).toBe(true);
+    expect(re(cli).test(`node ${cli} run`)).toBe(true);
+  });
+  it("não casa outros comandos, outras instalações nem outros nodes", () => {
+    expect(re(cli).test(`"${nodeExe}" "${cli}" uninstall --service --apply`)).toBe(false);
+    expect(re(cli).test(`"${nodeExe}" "${cli}" run-other`)).toBe(false);
+    expect(re(cli).test(`"${nodeExe}" "D:\\outro\\global-agents\\apps\\agent\\dist\\cli.js" run`)).toBe(false);
+    expect(re(cli).test(`"${nodeExe}" "C:\\Users\\Admin\\AppData\\claude-code\\cli.js" run`)).toBe(false);
+    expect(re(cli).test(`"${nodeExe}" C:\\p\\node_modules\\vite\\bin\\vite.js`)).toBe(false);
+    expect(re(cli).test(`"${nodeExe}" "X${cli}" run`)).toBe(false);
+  });
+  it("caminhos com espaço, apóstrofo e colchetes", () => {
+    for (const c of ["C:\\Users\\João Silva\\ga\\dist\\cli.js", "C:\\Users\\O'Neil\\ga\\dist\\cli.js", "C:\\dev\\[app] (1)\\ga\\dist\\cli.js"]) {
+      expect(re(c).test(`"${nodeExe}" "${c}" run`)).toBe(true);
+      expect(re(c).test(`"${nodeExe}" "${c}" doctor`)).toBe(false);
+    }
   });
 });
