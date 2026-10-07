@@ -83,6 +83,17 @@ function send(res: ServerResponse, status: number, body?: unknown): void {
   res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) }).end(text);
 }
 
+/** Mensagem do `EADDRINUSE` na porta dos hooks: quem usa a porta e como liberar, por plataforma. */
+export function portInUseMessage(port: number, platform: NodeJS.Platform = process.platform): string {
+  const como =
+    platform === "win32"
+      ? `No Windows, encerre o node.exe antigo do agente (o /End do Agendador não derruba o node filho) e inicie de novo:\n  Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'dist.cli.js.{1,3}run' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }\n  schtasks /Run /TN global-agents`
+      : platform === "linux"
+        ? "No Linux, reinicie o serviço: systemctl --user restart global-agents"
+        : "Encerre o processo antigo do agente e inicie de novo.";
+  return `a porta ${port} (127.0.0.1) dos hooks já está em uso: provavelmente já existe outro agente (ou outro programa) rodando nela. ${como}\nSe for outro programa, troque a porta com "port" no config.json.`;
+}
+
 export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
   const version = agentVersion();
   const pending = new Set<ServerResponse>();
@@ -152,9 +163,12 @@ export function startHookServer(opts: HookServerOptions): Promise<HookServer> {
   });
 
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
+    const onError = (e: Error): void => {
+      reject((e as NodeJS.ErrnoException).code === "EADDRINUSE" ? new Error(portInUseMessage(opts.port), { cause: e }) : e);
+    };
+    server.once("error", onError);
     server.listen(opts.port, "127.0.0.1", () => {
-      server.off("error", reject);
+      server.off("error", onError);
       const addr = server.address();
       const port = typeof addr === "object" && addr !== null ? addr.port : opts.port;
       resolve({
