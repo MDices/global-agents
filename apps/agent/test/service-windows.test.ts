@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  TASK_NAME, buildTaskArgs, buildTaskXml, encodeTaskXml, runWindowsService, schtasksCreateArgs, schtasksDeleteArgs,
+  TASK_NAME, buildTaskArgs, killOrphanNodeArgs, killOrphanNodeScript, buildTaskXml, encodeTaskXml, runWindowsService, schtasksCreateArgs, schtasksDeleteArgs,
   schtasksEndArgs, serviceBackend, windowsUserId, xmlEscape, type WindowsServiceRun,
 } from "../src/service/windows.js";
 
@@ -112,6 +112,37 @@ describe("runWindowsService", () => {
     const calls: string[][] = [];
     const m = mk({ action: "uninstall", apply: true, exec: async (_f, a) => { calls.push(a); if (a[0] === "/End") throw new Error("não está rodando"); } });
     await runWindowsService(m.run);
-    expect(calls).toEqual([schtasksEndArgs(), schtasksDeleteArgs()]);
+    expect(calls).toEqual([schtasksEndArgs(), killOrphanNodeArgs(CLI), schtasksDeleteArgs()]);
+  });
+  it("uninstall: powershell sem shell, argumentos em array, filtrando pelo cli.js", async () => {
+    const calls: Array<[string, string[]]> = [];
+    const m = mk({ action: "uninstall", apply: true, exec: async (f, a) => { calls.push([f, a]); } });
+    await runWindowsService(m.run);
+    expect(calls[1]?.[0]).toBe("powershell.exe");
+    expect(calls[1]?.[1].slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+    expect(calls[1]?.[1][3]).toContain(CLI);
+  });
+  it("uninstall: falha ao encerrar o node vira aviso e o /Delete continua", async () => {
+    const calls: string[] = [];
+    const m = mk({ action: "uninstall", apply: true, exec: async (f, a) => { calls.push(f === "schtasks" ? a[0]! : f); if (f === "powershell.exe") throw new Error("sem powershell"); } });
+    await runWindowsService(m.run);
+    expect(calls).toEqual(["/End", "powershell.exe", "/Delete"]);
+    expect(m.out.join("\n")).toContain("aviso: não consegui encerrar o node órfão");
+    expect(m.out.join("\n")).toContain("parada e removida");
+  });
+  it("uninstall sem apply imprime também o passo do node", async () => {
+    const m = mk({ action: "uninstall" });
+    await runWindowsService(m.run);
+    expect(m.calls).toEqual([]);
+    expect(m.out.join("\n")).toContain("Get-CimInstance Win32_Process");
+  });
+});
+
+describe("killOrphanNodeScript", () => {
+  it("escapa aspa simples do caminho e não usa aspas duplas", () => {
+    const sc = killOrphanNodeScript("C:\\Users\\O'Neil\\cli.js");
+    expect(sc).toContain("'C:\\Users\\O''Neil\\cli.js'");
+    expect(sc).not.toContain('"');
+    expect(sc).toContain("\\x22?\\s+run");
   });
 });

@@ -95,6 +95,37 @@ export function schtasksDeleteArgs(): string[] {
   return ["/Delete", "/TN", TASK_NAME, "/F"];
 }
 
+/** Aspas simples do PowerShell: dentro de '...' só a própria aspa simples precisa ser dobrada. */
+export function psQuote(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Script (PowerShell 5.1 e 7) que encerra os `node.exe` cuja linha de comando tem o `cli.js` desta instalação seguido
+ * de ` run`. O `/End` do Agendador derruba só o `conhost` da tarefa: o node filho sobrevive e segura a porta dos hooks.
+ * Sem aspas duplas no script, para atravessar o `execFile` sem depender do escape de argumentos do Windows
+ * (`\x22` é a aspa dupla na regex: o cli aparece citado na linha de comando da tarefa).
+ */
+export function killOrphanNodeScript(cli: string): string {
+  return [
+    `$re = [regex]::Escape(${psQuote(cli)}) + '\\x22?\\s+run(\\s|$)'`,
+    `$alvo = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match $re })`,
+    `foreach ($p in $alvo) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }`,
+    `$fim = (Get-Date).AddSeconds(5)`,
+    `while ((Get-Date) -lt $fim -and @($alvo | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -gt 0) { Start-Sleep -Milliseconds 200 }`,
+    `Write-Output ('node órfão encerrado: ' + $alvo.Count)`,
+  ].join("; ");
+}
+
+export function killOrphanNodeArgs(cli: string): string[] {
+  return ["-NoProfile", "-NonInteractive", "-Command", killOrphanNodeScript(cli)];
+}
+
+/** Comando equivalente para colar no PowerShell (modo sem `--apply`). */
+export function killOrphanNodeHint(cli: string): string {
+  return killOrphanNodeScript(cli);
+}
+
 export interface WindowsServiceRun extends TaskOptions {
   action: "install" | "uninstall";
   apply: boolean;
@@ -123,10 +154,14 @@ export async function runWindowsService(r: WindowsServiceRun): Promise<void> {
     return;
   }
   if (!r.apply) {
-    r.log(`para remover a tarefa "${TASK_NAME}" (não executei nada), rode no cmd.exe:\n  schtasks /End /TN ${TASK_NAME}\n  schtasks /Delete /TN ${TASK_NAME} /F\n\nou repita o comando com --apply.`);
+    r.log(`para remover a tarefa "${TASK_NAME}" (não executei nada), rode no cmd.exe:\n  schtasks /End /TN ${TASK_NAME}\n  schtasks /Delete /TN ${TASK_NAME} /F\n\no /End não derruba o node.exe filho; no PowerShell, encerre-o também:\n  ${killOrphanNodeHint(r.cli)}\n\nou repita o comando com --apply.`);
     return;
   }
   await r.exec("schtasks", schtasksEndArgs()).catch(() => undefined); // não estar rodando não é erro
+  // O /End encerra só o conhost; o node filho fica órfão. Falha aqui é aviso, não erro.
+  await r.exec("powershell.exe", killOrphanNodeArgs(r.cli)).catch((e: unknown) => {
+    r.log(`aviso: não consegui encerrar o node órfão do agente (${e instanceof Error ? e.message : String(e)}); confira com o comando de diagnóstico em docs/windows.md`);
+  });
   await r.exec("schtasks", schtasksDeleteArgs());
   r.log(`tarefa "${TASK_NAME}" parada e removida`);
 }
