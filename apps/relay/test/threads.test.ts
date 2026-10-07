@@ -248,3 +248,74 @@ describe("ThreadRegistry.rename", () => {
     expect(port.of("createThread")).toHaveLength(1);
   });
 });
+
+describe("ThreadRegistry.updateHeader", () => {
+  const flush = async (): Promise<void> => { await vi.advanceTimersByTimeAsync(0); };
+
+  it("grava o id da mensagem do cabeçalho e edita quando chega bgId, sem mudar o resto", async () => {
+    await reg.ensureThread(M, S);
+    const messageId = db.sessions.get("s1")?.headerMessageId;
+    expect(messageId).toBeTruthy();
+    reg.updateHeader("s1", { bgId: "b1", name: S.name, cwd: S.cwd });
+    await flush();
+    const edits = port.of("editCard");
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toMatchObject({ threadId: db.sessions.get("s1")?.threadId, messageId });
+    expect(edits[0]?.card.embed.fields).toContainEqual({ name: "Abrir no terminal", value: "`claude attach b1`", inline: false });
+    expect(edits[0]?.card.embed.fields).toContainEqual({ name: "Conta", value: "leonardo@exemplo.com.br", inline: true });
+  });
+
+  it("conteúdo igual ao já mostrado não edita; só uma chamada em voo por vez, o último valor vence", async () => {
+    await reg.ensureThread(M, { ...S, bgId: "b1" });
+    reg.updateHeader("s1", { name: S.name, cwd: S.cwd, bgId: "b1" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(0);
+    reg.updateHeader("s1", { name: "um" });
+    reg.updateHeader("s1", { name: "dois" });
+    await flush();
+    const titles = port.of("editCard").map((c) => c.card.embed.title);
+    expect(titles.at(-1)).toBe("Sessão dois");
+    reg.updateHeader("s1", { name: "dois" });
+    await flush();
+    expect(port.of("editCard").map((c) => c.card.embed.title)).toEqual(titles);
+  });
+
+  it("sessão sem thread conhecida é ignorada (nunca cria thread)", async () => {
+    reg.updateHeader("nada", { bgId: "b" });
+    await flush();
+    expect(port.of("createThread")).toHaveLength(0);
+    expect(port.of("editCard")).toHaveLength(0);
+  });
+
+  it("depois de um restart o id vem do banco e a edição continua funcionando", async () => {
+    await reg.ensureThread(M, S);
+    const messageId = db.sessions.get("s1")?.headerMessageId;
+    reg.dispose();
+    reg = new ThreadRegistry({ db, port, channelFor: async () => "ch-1", log });
+    await reg.ensureThread(M, S);
+    reg.updateHeader("s1", { bgId: "b2" });
+    await flush();
+    expect(port.of("editCard")[0]?.messageId).toBe(messageId);
+  });
+
+  it("thread anterior à migração (sem id gravado) não edita nada", async () => {
+    db.sessions.upsert({ sessionId: "old", machine: M, name: "velha", threadId: "th-old", state: "done", updatedAt: 1 });
+    await reg.ensureThread(M, { sessionId: "old", name: "velha" });
+    reg.updateHeader("old", { bgId: "b" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(0);
+  });
+
+  it("falha na edição vai para o log e a próxima informação tenta de novo", async () => {
+    await reg.ensureThread(M, S);
+    const orig = port.editCard.bind(port);
+    port.editCard = async () => { throw new Error("boom"); };
+    reg.updateHeader("s1", { bgId: "b1" });
+    await flush();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("falha ao editar o cabeçalho"));
+    port.editCard = orig;
+    reg.updateHeader("s1", { bgId: "b1" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(1);
+  });
+});

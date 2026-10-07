@@ -224,6 +224,7 @@ export function createRouter(deps: RouterDeps): Router {
         ...(state !== undefined ? { state } : {}),
       });
       threads.rename(s.sessionId, s.name);
+      threads.updateHeader(s.sessionId, { name: s.name, cwd: s.cwd, ...(s.bgId !== undefined ? { bgId: s.bgId } : {}) });
       if (state !== undefined) threads.setState(threadId, state);
       db.sessions.upsert({
         sessionId: s.sessionId, machine, name: s.name, cwd: s.cwd, updatedAt: Date.now(),
@@ -236,6 +237,9 @@ export function createRouter(deps: RouterDeps): Router {
   const onStatus = async (machine: string, e: EventOf<"session.status">): Promise<void> => {
     const threadId = await threads.ensureThread(machine, { sessionId: e.sessionId, name: e.name, cwd: e.cwd, state: e.state });
     threads.rename(e.sessionId, e.name);
+    // Sem `name`: o hook cai no nome da pasta quando o inventário ainda não conhece a sessão, e o cabeçalho voltaria
+    // a "CDT" depois do ack. O nome do cabeçalho vem do ack do `/novo` e do `session.list` (inventário).
+    threads.updateHeader(e.sessionId, { cwd: e.cwd });
     threads.setState(threadId, e.state);
     db.sessions.upsert({ sessionId: e.sessionId, machine, name: e.name, cwd: e.cwd, state: e.state, updatedAt: Date.now() });
   };
