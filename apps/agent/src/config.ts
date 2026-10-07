@@ -12,6 +12,8 @@ const ConfigSchema = z.object({
   token: z.string().min(1),
   machineName: z.string().optional(),
   projects: z.array(z.string()).default([]),
+  /** Pastas raiz de desenvolvimento (absolutas): tudo dentro delas pode virar sessão pelo `/novo`. */
+  devRoots: z.array(z.string()).default([]),
   port: z.number().int().default(48476),
   claudeBin: z.string().default("claude"),
   dataDir: z.string().default(DEFAULT_DIR),
@@ -42,28 +44,45 @@ export function loadConfig(path: string = DEFAULT_CONFIG_PATH): AgentConfig {
   return parseConfig(raw);
 }
 
+export const INSTALL_REQUIRES_TEXT = "install exige --relay e --token (ou a variável GLOBAL_AGENTS_TOKEN)";
+
+/** Erro de uso do `install` (a CLI mostra o uso junto). */
+export class InstallUsageError extends Error {}
+
 export interface InstallInput {
-  relayUrl: string;
-  token: string;
+  /** Ausente reaproveita o da config anterior (obrigatório sem config). */
+  relayUrl?: string;
+  /** Ausente reaproveita o da config anterior (obrigatório sem config). */
+  token?: string;
   fingerprint?: string;
   /** Vazio mantém os projetos da config anterior. */
   projects: string[];
+  /** Vazio mantém as raízes dev da config anterior. */
+  devRoots?: string[];
 }
 
-/** Config do `install`: mescla com a anterior; relay novo sem `--fingerprint` descarta o pin antigo. */
+/**
+ * Config do `install`: mescla com a anterior. Com config anterior, `--relay`, token e `--fingerprint` são opcionais
+ * (usa os salvos); sem ela, relay e token são obrigatórios. Relay novo sem `--fingerprint` descarta o pin antigo.
+ */
 export function installConfig(previous: AgentConfig | undefined, input: InstallInput): { cfg: AgentConfig; warnings: string[] } {
+  const relayUrl = input.relayUrl ?? previous?.relayUrl;
+  const token = input.token ?? previous?.token;
+  if (relayUrl === undefined || token === undefined) throw new InstallUsageError(INSTALL_REQUIRES_TEXT);
   const warnings: string[] = [];
   const base: Partial<AgentConfig> = { ...previous };
-  if (input.fingerprint === undefined && previous !== undefined && previous.relayUrl !== input.relayUrl && previous.relayCertFingerprint !== undefined) {
+  if (input.fingerprint === undefined && previous !== undefined && previous.relayUrl !== relayUrl && previous.relayCertFingerprint !== undefined) {
     delete base.relayCertFingerprint;
     warnings.push("relay mudou; o fingerprint anterior foi descartado — passe --fingerprint para fixar o certificado novo");
   }
+  const devRoots = input.devRoots ?? [];
   const cfg = parseConfig({
     ...base,
-    relayUrl: input.relayUrl,
-    token: input.token,
+    relayUrl,
+    token,
     ...(input.fingerprint !== undefined ? { relayCertFingerprint: input.fingerprint } : {}),
     ...(input.projects.length > 0 ? { projects: input.projects } : {}),
+    ...(devRoots.length > 0 ? { devRoots } : {}),
   });
   return { cfg, warnings };
 }

@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { installConfig, loadConfig, saveConfig } from "../src/config.js";
+import { INSTALL_REQUIRES_TEXT, installConfig, InstallUsageError, loadConfig, saveConfig } from "../src/config.js";
 
 function tmpConfig(content: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "ga-cfg-"));
@@ -40,7 +40,7 @@ describe("saveConfig", () => {
   it.skipIf(process.platform === "win32")("força modo 0600 mesmo se o arquivo já existia aberto", () => {
     const p = tmpConfig({});
     chmodSync(p, 0o644);
-    saveConfig({ relayUrl: "wss://1.2.3.4:8443/ws", token: "t", projects: [], port: 48476, claudeBin: "claude", dataDir: "/d" }, p);
+    saveConfig({ relayUrl: "wss://1.2.3.4:8443/ws", token: "t", projects: [], devRoots: [], port: 48476, claudeBin: "claude", dataDir: "/d" }, p);
     expect(statSync(p).mode & 0o777).toBe(0o600);
   });
 });
@@ -71,6 +71,38 @@ describe("installConfig", () => {
 
   it("sem config anterior aplica os padrões", () => {
     const { cfg } = installConfig(undefined, { relayUrl: "ws://h:1/ws", token: "t", projects: [] });
-    expect(cfg).toMatchObject({ port: 48476, claudeBin: "claude", projects: [] });
+    expect(cfg).toMatchObject({ port: 48476, claudeBin: "claude", projects: [], devRoots: [] });
+  });
+
+  it("sem config anterior continua exigindo relay e token", () => {
+    expect(() => installConfig(undefined, { token: "t", projects: [] })).toThrow(InstallUsageError);
+    expect(() => installConfig(undefined, { relayUrl: "ws://h:1/ws", projects: [], devRoots: ["/d"] })).toThrow(INSTALL_REQUIRES_TEXT);
+  });
+
+  it("com config anterior, só --dev-root: reaproveita relay, token, fingerprint e projetos", () => {
+    const prev = loadConfig(tmpConfig({ relayUrl: "wss://1.2.3.4:8443/ws", relayCertFingerprint: FP, token: "segredo", machineName: "m", projects: ["/x"] }));
+    expect(prev.devRoots).toEqual([]);
+    const { cfg, warnings } = installConfig(prev, { projects: [], devRoots: ["/home/u/dev", "/home/u/work"] });
+    expect(cfg).toMatchObject({
+      relayUrl: "wss://1.2.3.4:8443/ws", relayCertFingerprint: FP, token: "segredo", machineName: "m",
+      projects: ["/x"], devRoots: ["/home/u/dev", "/home/u/work"],
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("--dev-root e --project substituem a lista correspondente; ausentes mantêm a anterior", () => {
+    const prev = loadConfig(tmpConfig({ relayUrl: "ws://h:1/ws", token: "t", projects: ["/x"], devRoots: ["/d1", "/d2"] }));
+    expect(installConfig(prev, { projects: [] }).cfg).toMatchObject({ projects: ["/x"], devRoots: ["/d1", "/d2"] });
+    expect(installConfig(prev, { projects: ["/y"] }).cfg).toMatchObject({ projects: ["/y"], devRoots: ["/d1", "/d2"] });
+    expect(installConfig(prev, { projects: [], devRoots: ["/d3"] }).cfg).toMatchObject({ projects: ["/x"], devRoots: ["/d3"] });
+  });
+
+  it("token novo com config anterior substitui o salvo; --relay novo sem fingerprint ainda descarta o pin", () => {
+    const prev = loadConfig(tmpConfig({ relayUrl: "wss://1.2.3.4:8443/ws", relayCertFingerprint: FP, token: "velho" }));
+    expect(installConfig(prev, { token: "novo", projects: [] }).cfg).toMatchObject({ token: "novo", relayCertFingerprint: FP });
+    const moved = installConfig(prev, { relayUrl: "wss://9.9.9.9:8443/ws", projects: [] });
+    expect(moved.cfg).toMatchObject({ token: "velho", relayUrl: "wss://9.9.9.9:8443/ws" });
+    expect(moved.cfg).not.toHaveProperty("relayCertFingerprint");
+    expect(moved.warnings).toHaveLength(1);
   });
 });

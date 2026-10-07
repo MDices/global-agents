@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONFIG_PATH, installConfig, loadConfig, saveConfig } from "./config.js";
+import { DEFAULT_CONFIG_PATH, installConfig, InstallUsageError, loadConfig, saveConfig } from "./config.js";
 import { defaultDeps, runDoctor } from "./doctor.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
@@ -16,8 +16,13 @@ import { runWindowsService, serviceBackend, windowsUserId, type WindowsServiceRu
 const USAGE = `uso: global-agents <comando> [opções]
 
 comandos:
-  install --relay <url> [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--service]
+  install --relay <url> [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--dev-root <dir>]... [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
+            --dev-root (repetível) define as pastas raiz de desenvolvimento: tudo dentro delas
+            pode virar sessão pelo /novo do Discord, inclusive pasta nova (criar:true);
+            com config já gravada, --relay, --token e --fingerprint são opcionais (usa os salvos),
+            então "install --dev-root <dir>" só troca as raízes; --project e --dev-root
+            substituem a lista correspondente, e quem não for passado mantém a anterior;
             --service também grava a unidade systemd --user (Linux) ou mostra o comando do
             Agendador de Tarefas ao logon (Windows; com --apply o schtasks é executado)
   uninstall [--service] [--apply]
@@ -38,7 +43,7 @@ interface Args {
   apply: boolean;
 }
 
-const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--config"]);
+const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--dev-root", "--config"]);
 
 function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string[]>();
@@ -134,18 +139,38 @@ async function uninstallService(apply: boolean): Promise<void> {
   if (r !== "foreign") console.log("\npara parar e desativar, rode (a unidade já foi removida do disco):\n  systemctl --user disable --now global-agents && systemctl --user daemon-reload");
 }
 
+/** Avisa (sem falhar) sobre raiz dev que não existe ou não é pasta: ela pode ser criada depois. */
+function checkDevRoots(roots: string[]): void {
+  for (const r of roots) {
+    let isDir = false;
+    try { isDir = statSync(r).isDirectory(); } catch { /* não existe */ }
+    if (!isDir) console.warn(`aviso: a pasta dev ${r} ${existsSync(r) ? "não é uma pasta" : "não existe"}; ela fica na config, mas o /novo só funciona nela depois que existir`);
+  }
+}
+
 async function install(a: Args): Promise<void> {
   const relayUrl = one(a, "--relay");
   const token = resolveToken(one(a, "--token"), process.env);
-  if (relayUrl === undefined || token === undefined) throw new UsageError("install exige --relay e --token (ou a variável GLOBAL_AGENTS_TOKEN)");
   const fingerprint = one(a, "--fingerprint");
   const path = configPath(a);
-  // Reinstalar mantém o que não foi passado agora (machineName, porta, dataDir…).
+  // Reinstalar mantém o que não foi passado agora (relay, token, fingerprint, machineName, porta, dataDir…).
   const previous = existsSync(path) ? loadConfig(path) : undefined;
   const projects = (a.flags.get("--project") ?? []).map((p) => resolve(p));
-  const { cfg, warnings } = installConfig(previous, {
-    relayUrl, token, projects, ...(fingerprint !== undefined ? { fingerprint } : {}),
-  });
+  const devRoots = [...new Set((a.flags.get("--dev-root") ?? []).map((p) => resolve(p)))];
+  checkDevRoots(devRoots);
+  let result: ReturnType<typeof installConfig>;
+  try {
+    result = installConfig(previous, {
+      projects, devRoots,
+      ...(relayUrl !== undefined ? { relayUrl } : {}),
+      ...(token !== undefined ? { token } : {}),
+      ...(fingerprint !== undefined ? { fingerprint } : {}),
+    });
+  } catch (e) {
+    if (e instanceof InstallUsageError) throw new UsageError(e.message);
+    throw e;
+  }
+  const { cfg, warnings } = result;
   for (const w of warnings) console.warn(`aviso: ${w}`);
   saveConfig(cfg, path);
   console.log(`config gravada em ${path}`);
@@ -197,6 +222,7 @@ async function status(a: Args): Promise<number> {
   console.log(`relay:       ${cfg.relayUrl}`);
   console.log(`certificado: ${cfg.relayCertFingerprint !== undefined ? `fixado (${cfg.relayCertFingerprint})` : "não fixado"}`);
   console.log(`projetos:    ${cfg.projects.length > 0 ? cfg.projects.join(", ") : "nenhum"}`);
+  console.log(`raízes dev:  ${cfg.devRoots.length > 0 ? cfg.devRoots.join(", ") : "nenhuma"}`);
   console.log(`porta local: ${cfg.port}`);
   console.log(`dados:       ${cfg.dataDir}`);
   try {

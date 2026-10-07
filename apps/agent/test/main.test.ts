@@ -52,10 +52,10 @@ function fakeRun(args: string[]): Promise<ExecResult> {
   return Promise.resolve({ code: 1, stdout: "", stderr: "inesperado" });
 }
 
-async function setup(extra: Partial<AgentDeps> = {}) {
+async function setup(extra: Partial<AgentDeps> = {}, cfgOver: Partial<AgentConfig> = {}) {
   const cfg: AgentConfig = {
     relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: ["/home/x/proj"],
-    port: 0, claudeBin: "claude", dataDir: dir,
+    devRoots: [], port: 0, claudeBin: "claude", dataDir: dir, ...cfgOver,
   };
   const inventory = new FakeInventory();
   let client: FakeClient | undefined;
@@ -94,7 +94,7 @@ describe("createAgent", () => {
     expect(AgentEventSchema.safeParse(hello).success).toBe(true);
     expect(hello).toMatchObject({
       type: "agent.hello", machine: expect.stringMatching(/^fedora\//), version: "0.1.0", os: process.platform,
-      claudeVersion: "2.1.291", claudeAccount: "leo@example.com", projects: ["/home/x/proj"],
+      claudeVersion: "2.1.291", claudeAccount: "leo@example.com", projects: ["/home/x/proj"], devRoots: [],
     });
     expect(client.opts).toMatchObject({ url: "ws://127.0.0.1:1/ws", token: "segredo" });
     expect(inventory.start).toHaveBeenCalledTimes(1);
@@ -102,6 +102,56 @@ describe("createAgent", () => {
     inventory.set([SESSION]);
     expect(client.types()).toEqual(["agent.hello", "session.list"]);
     expect(client.sent[1]).toMatchObject({ type: "session.list", sessions: [SESSION] });
+  });
+
+  describe("raízes dev", () => {
+    const ROOTS = ["/home/x/dev"];
+
+    it("hello leva devRoots; a cada conexão vai um agent.projects com a lista descoberta", async () => {
+      const discover = vi.fn(() => Promise.resolve(["/home/x/dev/a", "/home/x/dev/b/repo"]));
+      const { client } = await setup({ discover }, { devRoots: ROOTS });
+      expect(discover).toHaveBeenCalledWith(ROOTS);
+      expect(client.sent[0]).toMatchObject({ type: "agent.hello", devRoots: ROOTS });
+      client.emit("connected");
+      client.emit("connected");
+      expect(client.types()).toEqual(["agent.hello", "agent.projects", "agent.projects"]);
+      const ev = client.sent[1];
+      expect(AgentEventSchema.safeParse(ev).success).toBe(true);
+      expect(ev).toMatchObject({ type: "agent.projects", devRoots: ROOTS, projects: ["/home/x/dev/a", "/home/x/dev/b/repo"] });
+    });
+
+    it("varre de novo a cada 5 min e só reenvia quando a lista muda", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const lists = [["/home/x/dev/a"], ["/home/x/dev/a"], ["/home/x/dev/a", "/home/x/dev/novo"]];
+      const discover = vi.fn(() => Promise.resolve(lists.length > 1 ? lists.shift()! : lists[0]!));
+      const { client } = await setup({ discover }, { devRoots: ROOTS });
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(client.types()).toEqual(["agent.hello"]);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(client.types()).toEqual(["agent.hello", "agent.projects"]);
+      expect(client.sent[1]).toMatchObject({ projects: ["/home/x/dev/a", "/home/x/dev/novo"] });
+      expect(discover).toHaveBeenCalledTimes(3);
+    });
+
+    it("sem raízes dev não varre nada (agent.projects na conexão vai vazio)", async () => {
+      const discover = vi.fn(() => Promise.resolve(["/x"]));
+      const { client } = await setup({ discover });
+      client.emit("connected");
+      expect(discover).not.toHaveBeenCalled();
+      expect(client.sent[1]).toMatchObject({ type: "agent.projects", devRoots: [], projects: [] });
+    });
+
+    it("session.create passa pela contenção do agente: pasta fora das raízes vira command.error", async () => {
+      const root = mkdtempSync(join(tmpdir(), "agent-root-"));
+      const spawn = vi.fn(() => Promise.resolve({ sessionId: "s", bgId: "b" }));
+      const { client } = await setup({ discover: () => Promise.resolve([]), commands: { spawn } }, { devRoots: [root], projects: [] });
+      const cmd: RelayCommand = { ...newEnvelope("relay/vps"), type: "session.create", commandId: "c1", cwd: tmpdir(), name: "n", prompt: "p", permissionMode: "plan" };
+      client.emit("command", cmd);
+      await vi.waitFor(() => { expect(client.types()).toContain("command.error"); });
+      expect(client.sent.find((e) => e.type === "command.error")).toMatchObject({ reason: expect.stringContaining("fora das pastas dev") as unknown });
+      expect(spawn).not.toHaveBeenCalled();
+      rmSync(root, { recursive: true, force: true });
+    });
   });
 
   it("hello omite claudeVersion/claudeAccount quando o claude falha", async () => {
@@ -281,7 +331,7 @@ describe("createAgent", () => {
     let client: FakeClient | undefined;
     const started = vi.fn();
     const a = createAgent(
-      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], port: 0, claudeBin: "claude", dataDir: dir },
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], devRoots: [], port: 0, claudeBin: "claude", dataDir: dir },
       {
         inventory: new FakeInventory(),
         client: (opts) => { client = new FakeClient(opts); client.start = started; return client; },

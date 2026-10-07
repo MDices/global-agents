@@ -47,7 +47,7 @@ describe.skipIf(!E2E)("permissões e2e (real)", () => {
     let client: FakeClient | undefined;
     let port = 0;
     const agent = createAgent(
-      { relayUrl: "ws://127.0.0.1:1/ws", token: "x", machineName: "e2e", projects: [root], port: 0, claudeBin: "claude", dataDir },
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "x", machineName: "e2e", projects: [root], devRoots: [], port: 0, claudeBin: "claude", dataDir },
       {
         inventory,
         client: () => (client = new FakeClient()),
