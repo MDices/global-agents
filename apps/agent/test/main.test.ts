@@ -208,6 +208,24 @@ describe("createAgent", () => {
     expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "gestai-8d" });
   });
 
+  it("agente reiniciado (sem hook ainda) e cwd do inventário fora da pasta do transcript: session.list já traz o título", async () => {
+    const projects = join(dir, "projects");
+    mkdirSync(join(projects, "-home-x-worktree"), { recursive: true });
+    writeFileSync(join(projects, "-home-x-worktree", "s1.jsonl"), `${JSON.stringify({ type: "ai-title", aiTitle: "CRM integração", sessionId: "s1" })}\n`);
+    const row = { cwd: "/home/x/proj", kind: "interactive", sessionId: "s1", name: "proj-8d", status: "idle", pid: 10 };
+    const run = (args: string[]): Promise<ExecResult> =>
+      args[0] === "agents" ? Promise.resolve({ code: 0, stdout: JSON.stringify([row]), stderr: "" }) : fakeRun(args);
+    let client: FakeClient | undefined;
+    const a = createAgent(
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], devRoots: [], port: 0, claudeBin: "claude", dataDir: dir },
+      { client: (opts) => (client = new FakeClient(opts)), run, namer: new SessionNamer({ projectsDir: projects }) },
+    );
+    agent = a;
+    await a.start();
+    await vi.waitFor(() => { expect(client?.types()).toContain("session.list"); });
+    expect(client?.sent.find((e) => e.type === "session.list")).toMatchObject({ sessions: [{ sessionId: "s1", name: "CRM integração" }] });
+  });
+
   it("session.list e hook mandam o mesmo nome (sem oscilação); /rename chega no próximo poll", async () => {
     const projects = join(dir, "projects");
     const cwd = "/home/x/proj";
