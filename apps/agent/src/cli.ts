@@ -20,7 +20,7 @@ comandos:
   install [--relay <url>] [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--dev-root <dir>]... [--no-dev-root] [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
             --dev-root (repetível) define as pastas raiz de desenvolvimento: tudo dentro delas
-            pode virar sessão pelo /novo do Discord, inclusive pasta nova (criar:true), sem
+            pode virar sessão pelo /novo do Discord, inclusive pasta nova (nova_pasta:<nome>), sem
             cadastrar projeto nenhum; aceita ~/dev, caminho relativo e, no Windows, C:/dev;
             com config já gravada, --relay, --token e --fingerprint são opcionais (usa os salvos),
             então "install --dev-root <dir>" só troca as raízes (sem config, --relay e token são
