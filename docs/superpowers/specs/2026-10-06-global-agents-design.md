@@ -248,20 +248,31 @@ captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
 
 ### 6.2.3 Nome da thread
 
-- O agente manda o nome da sessão, no `session.list` e nos hooks, por esta prioridade: 1. o último `custom-title` do
-  transcript (gravado pelo `/rename`); 2. o último `ai-title` (o título automático que a extensão do VS Code mostra);
-  3. o `name` de `claude agents --json` (para sessões interativas sem título, `<pasta>-<2 caracteres do id>`);
-  4. o nome da pasta. Vale a **última** linha de cada tipo, e `custom-title` vence `ai-title` em qualquer ordem.
+- O agente manda o nome da sessão, no `session.list` e nos hooks, por esta prioridade:
+  1. o último `custom-title` do transcript (gravado pelo `/rename`);
+  2. o `name` de `claude agents --json` quando **não** é o automático: ele já reflete o `/rename`, e assim um
+     `custom-title` que saiu dos 256 KB lidos não perde para o `ai-title`;
+  3. o último `ai-title` (o título automático que a extensão do VS Code mostra);
+  4. o `name` automático do inventário, `<pasta>-<2 hex>` (`gestai-8d`). Os 2 caracteres não são o início do
+     `sessionId` (`gestai-8d` é a `872c5919…`, `gestai-e9` é a `e0e30914…`), então o agente confere só o formato;
+     um `/rename` exatamente nesse formato seria tratado como automático;
+  5. o nome da pasta.
+  Vale a **última** linha de cada tipo, e `custom-title` vence `ai-title` em qualquer ordem. O hook usa o nome cru
+  do inventário guardado no último poll (o inventário do agente guarda a lista já enriquecida).
 - Transcript: o `transcript_path` do hook, quando houve (guardado por sessão e reusado no `session.list`); senão
   `~/.claude/projects/<slug>/<sessionId>.jsonl` (ou `<CLAUDE_CONFIG_DIR>/projects`), com o slug do `cwd` como o Claude
   Code monta: todo caractere fora de `[A-Za-z0-9]` vira `-` (`/home/leo/dev/app` → `-home-leo-dev-app`,
   `C:\Users\Leo\app` → `C--Users-Leo-app`). Slug com mais de 200 caracteres ganha um hash do Claude Code: o agente
-  só usa a pasta se houver uma única com o mesmo prefixo.
+  só usa a pasta se houver uma única com o mesmo prefixo. Se o arquivo do slug não existe (o `cwd` do inventário não é a
+  pasta onde o transcript nasceu, ex.: worktree, e o agente reiniciou sem ter visto hook), procura `<sessionId>.jsonl`
+  em todas as pastas de `projects`, no máximo 1×/min por sessão sem transcript.
 - Leitura barata: só os últimos 256 KB do transcript (título fora do trecho não é achado e cai no próximo nível),
-  com cache por caminho com `size` e `mtime`. Erro de leitura cai no próximo nível, nunca derruba nada.
-- Sem oscilação: o hook segue a mesma prioridade do `session.list`. Quando só restaria o nome da pasta (nível 4), o
+  com cache LRU por caminho com `size` e `mtime` (até 500 entradas). Erro de leitura cai no próximo nível, nunca derruba nada.
+- Sem oscilação: o hook segue a mesma prioridade do `session.list`. Quando só restaria o nome da pasta (nível 5), o
   agente manda o `session.status` **sem** `name` e o relay mantém o nome já conhecido; para sessão desconhecida, o
   relay usa o nome da pasta do `cwd`. Agentes antigos ainda mandam o nome da pasta e podem oscilar como antes.
+  **Ordem de deploy:** relay antes dos agentes. O relay antigo descarta (com aviso no log) o `session.status` sem
+  `name`.
 - Renomear a thread segue o limite do Discord (1 edição a cada 300 s por thread): um `/rename` aparece no Discord em
   até ~5 min (o poll do inventário o percebe em até 5 s).
 
@@ -274,11 +285,15 @@ captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
   (`--agent-name telas --team-name session-… --parent-session-id <pai>`), `session_id` e transcript próprios, fora
   de `claude agents --json`. Os hooks dele trazem `agent_type`, mas nenhum campo de pai; só `TeammateIdle` traz
   `teammate_name`/`team_name`. O `config.json` do time lista os membros, mas o `leadSessionId` dele **não** é o
-  `session_id` do pai (visto em sessão `--bg` e em sessão interativa). A única ligação exata filho→pai é o
-  `--parent-session-id` na linha de comando do processo.
-- Decisão: teammate continua **sem thread própria** (§6.2.2): aparece como `@nome` no painel e nas linhas da thread
-  do líder, que já é "o chat" do pai. Não há thread `<pai> @<agente>`: exigiria ler a linha de comando de processos
-  (diferente em Linux e Windows) e criaria mais threads, contra a regra de thread só com atividade. Atenção: o
+  `session_id` do pai (visto em sessão `--bg` e em sessão interativa).
+- **A ligação exata filho→pai existe**: o `--parent-session-id <sessionId do pai>` na linha de comando do processo do
+  teammate (junto de `--agent-name`). Hooks e inventário não a trazem.
+- Decisão (revisão de 07/10): teammate continua **sem thread própria** (§6.2.2) e aparece como `@nome` no painel e
+  nas linhas da thread do líder: é o "dentro desse chat" pedido. Não há thread `<pai> @<agente>`.
+- Trabalho futuro, não implementado: usar o `--parent-session-id` para corrigir o vínculo teammate→líder do
+  `TeamTracker`, que hoje parte do `leadSessionId` do `config.json` (que não bate com o pai) e cai nos fallbacks
+  (prefixo, último líder ativo). Exige ler a linha de comando de processos (`/proc/<pid>/cmdline` no Linux,
+  `Win32_Process.CommandLine` no Windows). Atenção: o
   transcript do teammate herda o `custom-title` do pai; se um dia teammate passar pelo mapper, o nome sairia igual
   ao do pai.
 
