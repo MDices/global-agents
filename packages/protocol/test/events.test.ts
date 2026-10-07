@@ -28,6 +28,12 @@ describe("eventos", () => {
       { sessionId: "u2", name: "b", cwd: "/p", kind: "background", status: "waiting", state: "blocked", waitingFor: "permission prompt", bgId: "85285a68" } ] });
     expect(r.success).toBe(true);
   });
+  it("aceita session.status sem name (agente novo que só sabe o nome da pasta)", () => {
+    const r = AgentEventSchema.safeParse({ ...env(), type: "session.status", sessionId: "u", cwd: "/", state: "done" });
+    expect(r.success && r.data.type === "session.status" && r.data.name).toBeUndefined();
+    expect(r.success).toBe(true);
+  });
+
   it("recusa session.status com estado inválido", () => {
     expect(AgentEventSchema.safeParse({ ...env(), type: "session.status", sessionId: "u", name: "n", cwd: "/", state: "paused" }).success).toBe(false);
   });

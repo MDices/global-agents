@@ -29,7 +29,11 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   ev("agent.projects", { devRoots: z.array(z.string()), projects: z.array(z.string()) }),
   ev("agent.warning", { message: z.string(), sessionId: z.string().optional() }),
   ev("session.list", { sessions: z.array(SessionInfoSchema) }),
-  ev("session.status", { sessionId: z.string(), name: z.string(), cwd: z.string(), state: SessionStateSchema, snippet: z.string().optional() }),
+  /**
+   * `name` ausente: o agente não sabe nada melhor que o nome da pasta, e o relay mantém o nome já conhecido (evita a
+   * thread oscilar entre o nome da sessão e o da pasta). Agentes antigos sempre mandam.
+   */
+  ev("session.status", { sessionId: z.string(), name: z.string().optional(), cwd: z.string(), state: SessionStateSchema, snippet: z.string().optional() }),
   ev("turn.prompt", { sessionId: z.string(), text: z.string(), source: z.enum(["terminal", "remote"]) }),
   ev("turn.reply", { sessionId: z.string(), text: z.string(), stopReason: z.string().optional() }),
   ev("permission.request", { sessionId: z.string(), requestId: z.string(), tool: z.string(), description: z.string(), inputPreview: z.string(), expiresAt: z.string().datetime({ offset: true }) }),
