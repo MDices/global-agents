@@ -91,6 +91,16 @@ Write-Host '== 4. (re)iniciar o agente com a config nova'
 # /End falha se a tarefa não estiver rodando (primeira instalação): não é erro. Continue local porque, no
 # PowerShell 5.1, stderr de comando nativo com Stop vira exceção.
 & { $ErrorActionPreference = 'Continue'; schtasks /End /TN global-agents 2>&1 | Out-Null }
+# O /End derruba só o conhost da tarefa: o node.exe filho sobrevive, segura a porta dos hooks e o novo agente sai sem
+# aviso. Encerra os nodes que rodam o cli.js deste repositório (pelo CommandLine, que o Get-Process do 5.1 não tem).
+$cliRe = [regex]::Escape($cli) + '\x22?\s+run(\s|$)'
+$orfaos = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match $cliRe })
+foreach ($o in $orfaos) { Stop-Process -Id $o.ProcessId -Force -ErrorAction SilentlyContinue }
+$limite = (Get-Date).AddSeconds(5)
+while ((Get-Date) -lt $limite -and @($orfaos | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -gt 0) {
+  Start-Sleep -Milliseconds 200
+}
+Write-Host "node(s) antigo(s) do agente encerrado(s): $($orfaos.Count)"
 Start-Sleep -Seconds 1
 Invoke-Native 'schtasks /Run' { schtasks /Run /TN global-agents }
 
