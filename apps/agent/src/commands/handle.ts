@@ -42,6 +42,8 @@ export interface CommandDeps {
    * config). É a fronteira de confiança: o relay só confere o formato.
    */
   workspace: (cwd: string, create: boolean) => Promise<ResolvedWorkspace>;
+  /** Confere de novo a contenção logo antes de cada `--bg` (o real é `recheckInside`). */
+  recheck: (ws: ResolvedWorkspace) => Promise<void>;
   spawn: (input: SpawnInput) => Promise<{ sessionId: string; bgId: string }>;
   stop: (bgId: string) => Promise<void>;
   readRegistry: (pid: number) => SessionRegistry | undefined;
@@ -136,8 +138,8 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
           const ws = await deps.workspace(cmd.cwd, cmd.create === true);
           const r = await deps.spawn({
             cwd: ws.cwd, name: cmd.name, prompt: cmd.prompt, permissionMode: cmd.permissionMode,
-            // Só pasta dentro de raiz dev pode ganhar confiança automática do Claude Code.
-            ...(ws.root !== undefined ? { trustPaths: ws.trustPaths } : {}),
+            // Só pasta dentro de raiz dev pode ganhar confiança automática do Claude Code (e só ela tem raiz a reconferir).
+            ...(ws.root !== undefined ? { trustPaths: ws.trustPaths, guard: () => deps.recheck(ws) } : {}),
           });
           return ack(cmd.commandId, { sessionId: r.sessionId, bgId: r.bgId, cwd: ws.cwd });
         }

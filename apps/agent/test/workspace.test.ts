@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isInside, noDevRootText, NOT_EXISTS_TEXT, resolveWorkspace, type WorkspaceFs } from "../src/projects/workspace.js";
+import { noDevRootText } from "@global-agents/protocol";
+import { isInside, NOT_EXISTS_TEXT, recheckInside, resolveWorkspace, type WorkspaceFs } from "../src/projects/workspace.js";
 
 /** Raiz dev temporária real (com `realpath`: o tmp do macOS é symlink) e uma pasta de fora. */
 function sandbox(): { base: string; root: string; outside: string } {
@@ -20,7 +21,7 @@ describe("resolveWorkspace", () => {
   it("pasta existente dentro da raiz → permitida, sem criar", async () => {
     const { root } = sandbox();
     const r = await resolveWorkspace(join(root, "gestai"), false, { devRoots: [root], projects: [] });
-    expect(r).toEqual({ cwd: join(root, "gestai"), root, trustPaths: [join(root, "gestai")], created: false });
+    expect(r).toEqual({ cwd: join(root, "gestai"), root, realRoot: root, trustPaths: [join(root, "gestai")], created: false });
   });
 
   it("a própria raiz conta como permitida", async () => {
@@ -36,8 +37,8 @@ describe("resolveWorkspace", () => {
   });
 
   it("relativo sem raiz dev → erro pedindo --dev-root", async () => {
-    await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [], path: path.posix })).rejects.toThrow(noDevRootText(false));
-    expect(noDevRootText(false)).toBe("esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`");
+    const os = process.platform === "darwin" ? "darwin" : "linux";
+    await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [], path: path.posix })).rejects.toThrow(noDevRootText(os));
   });
 
   it("pasta fora das raízes → negada", async () => {
@@ -123,22 +124,67 @@ describe("resolveWorkspace", () => {
     expect(existsSync(ghost)).toBe(false);
   });
 
-  it("arquivo comum no caminho → não cria por cima", async () => {
+  it("arquivo comum no caminho → mensagem clara em português, nada criado", async () => {
     const { root } = sandbox();
-    writeFileSync(join(root, "arquivo"), "x");
-    await expect(resolveWorkspace("arquivo/nova", true, { devRoots: [root], projects: [] })).rejects.toThrow();
+    writeFileSync(join(root, "README.md"), "x");
+    await expect(resolveWorkspace("README.md/sub", true, { devRoots: [root], projects: [] })).rejects.toThrow(`${join(root, "README.md")} não é uma pasta`);
+    await expect(resolveWorkspace("README.md", false, { devRoots: [root], projects: [] })).rejects.toThrow("não é uma pasta");
+  });
+
+  it("~ e ~/x digitados no Discord são o home do agente", async () => {
+    const { base, root } = sandbox();
+    const home = base;
+    const r = await resolveWorkspace("~/dev/gestai", false, { devRoots: [root], projects: [], home });
+    expect(r.cwd).toBe(join(root, "gestai"));
+    expect((await resolveWorkspace("~/dev/nova", true, { devRoots: [root], projects: [], home })).created).toBe(true);
+    await expect(resolveWorkspace("~", false, { devRoots: [root], projects: [], home })).rejects.toThrow(/fora das pastas dev/);
+  });
+
+  it("recheca pós-mkdir: se a pasta criada resolve para fora da raiz, erro", async () => {
+    const disk = new Set(["/", "/d", "/fora"]);
+    const fs: WorkspaceFs = {
+      exists: (p) => Promise.resolve(disk.has(p)),
+      isDirectory: (p) => Promise.resolve(disk.has(p)),
+      // depois do mkdir, /d/nova "virou" um symlink para /fora/nova (corrida)
+      realpath: (p) => (p === "/d/nova" ? Promise.resolve("/fora/nova") : disk.has(p) ? Promise.resolve(p) : Promise.reject(new Error("ENOENT"))),
+      mkdirp: (p) => { disk.add(p); return Promise.resolve(); },
+    };
+    await expect(resolveWorkspace("nova", true, { devRoots: ["/d"], projects: [], path: path.posix, fs })).rejects.toThrow(/aponta para fora da pasta dev/);
+  });
+
+  it("recheckInside: ok enquanto dentro; pasta trocada por symlink para fora → erro; sem raiz, não confere", async () => {
+    const { root, outside } = sandbox();
+    const ws = await resolveWorkspace("gestai", false, { devRoots: [root], projects: [] });
+    expect(ws.realRoot).toBe(root);
+    await expect(recheckInside(ws)).resolves.toBeUndefined();
+    if (process.platform !== "win32") {
+      rmSync(join(root, "gestai"), { recursive: true });
+      symlinkSync(outside, join(root, "gestai"));
+      await expect(recheckInside(ws)).rejects.toThrow(/não está mais dentro da pasta dev/);
+    }
+    await expect(recheckInside({ cwd: outside, trustPaths: [], created: false })).resolves.toBeUndefined();
+  });
+
+  it("projeto explícito fora da raiz não tem raiz nem caminhos de confiança", async () => {
+    const { root, outside } = sandbox();
+    const r = await resolveWorkspace(outside, false, { devRoots: [root], projects: [outside] });
+    expect(r).toEqual({ cwd: outside, trustPaths: [], created: false });
   });
 });
 
-/** Disco falso do Windows: pastas existentes (em minúsculas) e `realpath` identidade. */
+/** Disco falso do Windows: sem diferenciar maiúsculas; o `realpath` devolve a caixa gravada no disco, como o real. */
 function winFs(dirs: string[]): WorkspaceFs & { made: string[] } {
-  const set = new Set(dirs.map((d) => d.toLowerCase()));
+  const disk = new Map(dirs.map((d) => [d.toLowerCase(), d]));
   const made: string[] = [];
   return {
     made,
-    exists: (p) => Promise.resolve(set.has(p.toLowerCase())),
-    realpath: (p) => (set.has(p.toLowerCase()) ? Promise.resolve(p) : Promise.reject(new Error("ENOENT"))),
-    mkdirp: (p) => { made.push(p); set.add(p.toLowerCase()); return Promise.resolve(); },
+    exists: (p) => Promise.resolve(disk.has(p.toLowerCase())),
+    isDirectory: (p) => Promise.resolve(disk.has(p.toLowerCase())),
+    realpath: (p) => {
+      const real = disk.get(p.toLowerCase());
+      return real !== undefined ? Promise.resolve(real) : Promise.reject(new Error("ENOENT"));
+    },
+    mkdirp: (p) => { made.push(p); disk.set(p.toLowerCase(), p); return Promise.resolve(); },
   };
 }
 
@@ -165,8 +211,30 @@ describe("resolveWorkspace no Windows (path.win32 injetado)", () => {
 
   it("relativo sem raiz → instrução do instalador do Windows", async () => {
     await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [], path: W, fs: winFs(disk) }))
-      .rejects.toThrow(noDevRootText(true));
-    expect(noDevRootText(true)).toBe("esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
+      .rejects.toThrow(noDevRootText("win32"));
+  });
+
+  it("caixa digitada diferente da do disco: realpath devolve a do disco e a contenção continua valendo", async () => {
+    const fs = winFs(disk);
+    const r = await resolveWorkspace("C:\\USERS\\leo\\DEV\\gestai", false, { devRoots: ["c:\\users\\leo\\dev"], projects: [], path: W, fs });
+    expect(r.realRoot).toBe("C:\\Users\\Leo\\Dev");
+    expect(r.trustPaths).toEqual(["C:\\USERS\\leo\\DEV\\gestai", "C:\\Users\\Leo\\Dev\\Gestai"]);
+  });
+
+  it("nomes reservados e ponto final são recusados no Windows (e aceitos no Linux)", async () => {
+    for (const bad of ["CON", "nul", "com1", "LPT9", "aux.txt", "app."]) {
+      const fs = winFs(disk);
+      await expect(resolveWorkspace(bad, true, { devRoots: ["C:\\Users\\Leo\\Dev"], projects: [], path: W, fs })).rejects.toThrow(/inválido no Windows/);
+      expect(fs.made).toEqual([]);
+    }
+    const { root } = sandbox();
+    expect((await resolveWorkspace("con", true, { devRoots: [root], projects: [] })).created).toBe(true);
+  });
+
+  it("~\\x no Windows expande para o perfil", async () => {
+    const fs = winFs(disk);
+    const r = await resolveWorkspace("~\\Dev\\Gestai", false, { devRoots: ["C:\\Users\\Leo\\Dev"], projects: [], path: W, fs, home: "C:\\Users\\Leo" });
+    expect(r.cwd).toBe("C:\\Users\\Leo\\Dev\\Gestai");
   });
 
   it("subpasta funda digitada à mão (além da varredura) é aceita sem cadastro", async () => {

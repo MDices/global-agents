@@ -16,7 +16,7 @@ import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
 import { PendingPermissions } from "./permissions/pending.js";
 import { discoverProjects } from "./projects/discover.js";
-import { resolveWorkspace } from "./projects/workspace.js";
+import { recheckInside, resolveWorkspace } from "./projects/workspace.js";
 import { TeamTracker } from "./team/tracker.js";
 import { RelayClient, type RelayClientEvents, type RelayClientOptions } from "./transport/client.js";
 import { Outbox } from "./transport/outbox.js";
@@ -123,6 +123,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     inventory,
     inject: injectPrompt,
     workspace: (cwd, create) => resolveWorkspace(cwd, create, { devRoots, projects: cfg.projects }),
+    recheck: (ws) => recheckInside(ws),
     spawn: (input) => spawnSession(input, { run, inventory, trust: (paths) => grantTrust(paths) }),
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),

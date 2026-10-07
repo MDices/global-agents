@@ -1,25 +1,25 @@
-import { lstat, mkdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
+import { noDevRootText } from "@global-agents/protocol";
 
 /** Nome aceito para cada pasta criada pelo `/novo criar:true`. */
 export const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const NOT_EXISTS_TEXT = "pasta não existe; use criar:true no /novo para criá-la";
-/** Sem pasta dev: o comando certo depende do sistema (o instalador do Windows é o script PowerShell). */
-export function noDevRootText(windows: boolean): string {
-  return windows
-    ? "esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`"
-    : "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`";
-}
+/** Nomes que o Windows reserva (com ou sem extensão): `CON`, `NUL`, `COM1`, `lpt9.txt`… */
+const WIN_RESERVED_RE = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\..*)?$/i;
 
 /** O que a resolução usa de `node:path` (o real é o da plataforma; os testes injetam `path.win32`). */
-export type PathApi = Pick<typeof path, "resolve" | "relative" | "isAbsolute" | "dirname" | "sep">;
+export type PathApi = Pick<typeof path, "resolve" | "relative" | "isAbsolute" | "dirname" | "join" | "sep">;
 
 /** O que a resolução usa do disco (o real é `node:fs/promises`). */
 export interface WorkspaceFs {
   /** `true` se o caminho existe sem seguir symlink (um symlink quebrado existe). */
   exists(p: string): Promise<boolean>;
   realpath(p: string): Promise<string>;
+  /** `true` se o caminho (seguindo symlink) é uma pasta. */
+  isDirectory(p: string): Promise<boolean>;
   mkdirp(p: string): Promise<void>;
 }
 
@@ -30,6 +30,8 @@ export interface WorkspacePolicy {
   projects: readonly string[];
   path?: PathApi;
   fs?: WorkspaceFs;
+  /** Home para expandir `~` digitado no Discord (padrão: o do usuário do agente). */
+  home?: string;
 }
 
 export interface ResolvedWorkspace {
@@ -37,6 +39,8 @@ export interface ResolvedWorkspace {
   cwd: string;
   /** Raiz dev que contém a pasta; ausente quando ela só foi aceita por estar na lista `projects`. */
   root?: string;
+  /** `realpath` da raiz no momento da checagem (para `recheckInside`). */
+  realRoot?: string;
   /** Caminhos reais da pasta (o resolvido e o `realpath`, sem repetição): onde gravar a confiança se preciso. */
   trustPaths: string[];
   created: boolean;
@@ -52,6 +56,13 @@ const nodeFs: WorkspaceFs = {
     }
   },
   realpath: (p) => realpath(p),
+  async isDirectory(p) {
+    try {
+      return (await stat(p)).isDirectory();
+    } catch {
+      return false;
+    }
+  },
   async mkdirp(p) {
     await mkdir(p, { recursive: true });
   },
@@ -111,12 +122,17 @@ export async function resolveWorkspace(cwd: string, create: boolean, policy: Wor
   const p = policy.path ?? path;
   const fs = policy.fs ?? nodeFs;
   const roots = policy.devRoots.map((r) => p.resolve(r));
+  // `~` e `~/…` (ou `~\…`) digitados no Discord são o home do usuário do agente, como no `install --dev-root`.
+  const typed = cwd === "~" ? (policy.home ?? homedir()) : /^~[\\/]/.test(cwd) ? p.join(policy.home ?? homedir(), cwd.slice(2)) : cwd;
   let abs: string;
-  if (p.isAbsolute(cwd)) abs = p.resolve(cwd);
+  if (p.isAbsolute(typed)) abs = p.resolve(typed);
   else {
     const first = roots[0];
-    if (first === undefined) throw new Error(`${noDevRootText(isWin(p))} (ou informe um caminho absoluto de um projeto configurado)`);
-    abs = p.resolve(first, cwd);
+    if (first === undefined) {
+      const os = isWin(p) ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+      throw new Error(`${noDevRootText(os)} (ou informe um caminho absoluto de um projeto configurado)`);
+    }
+    abs = p.resolve(first, typed);
   }
 
   const { existing, missing } = await nearestExisting(abs, p, fs);
@@ -144,12 +160,17 @@ export async function resolveWorkspace(cwd: string, create: boolean, policy: Wor
     return { cwd: abs, trustPaths: [], created: false };
   }
 
+  // O ancestral existente precisa ser pasta: `README.md/sub` daria ENOTDIR cru no mkdir (ou no --bg).
+  if (!(await fs.isDirectory(existing))) throw new Error(`${existing} não é uma pasta`);
   let created = false;
   if (missing.length > 0) {
     if (!create) throw new Error(`${NOT_EXISTS_TEXT} (${abs})`);
     for (const seg of missing) {
       if (!SEGMENT_RE.test(seg)) {
         throw new Error(`nome de pasta inválido: "${seg}"; use letras, números, ".", "_" ou "-", começando por letra ou número`);
+      }
+      if (isWin(p) && (WIN_RESERVED_RE.test(seg) || seg.endsWith("."))) {
+        throw new Error(`nome de pasta inválido no Windows: "${seg}" (nome reservado ou terminado em ponto)`);
       }
     }
     await fs.mkdirp(abs);
@@ -161,5 +182,19 @@ export async function resolveWorkspace(cwd: string, create: boolean, policy: Wor
     throw new Error(`a pasta ${abs} aponta para fora da pasta dev ${root}`);
   }
   const trustPaths = real === undefined || real === abs ? [abs] : [abs, real];
-  return { cwd: abs, root, trustPaths, created };
+  return { cwd: abs, root, ...(realRoot !== undefined ? { realRoot } : {}), trustPaths, created };
+}
+
+/**
+ * Confere de novo, imediatamente antes de abrir a sessão, que a pasta ainda está dentro da raiz (alguém com escrita na
+ * raiz pode ter trocado a pasta por um symlink depois do `resolveWorkspace`). Sem raiz (projeto explícito) não há o
+ * que conferir.
+ */
+export async function recheckInside(ws: ResolvedWorkspace, opts: { path?: PathApi; fs?: WorkspaceFs } = {}): Promise<void> {
+  if (ws.realRoot === undefined) return;
+  const p = opts.path ?? path;
+  const real = await realOrUndefined(opts.fs ?? nodeFs, ws.cwd);
+  if (real === undefined || !isInside(ws.realRoot, real, p)) {
+    throw new Error(`a pasta ${ws.cwd} mudou e não está mais dentro da pasta dev ${ws.root ?? ""}; nada foi aberto`);
+  }
 }

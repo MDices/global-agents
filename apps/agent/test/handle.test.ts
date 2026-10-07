@@ -24,6 +24,7 @@ function deps(over: Partial<CommandDeps> = {}) {
     inventory: { find: (id: string) => sessions.find((s) => s.sessionId === id) },
     inject: vi.fn<(t: InboxTarget, text: string, from: { name: string }) => Promise<void>>(() => Promise.resolve()),
     workspace: vi.fn<(cwd: string, create: boolean) => Promise<ResolvedWorkspace>>((cwd) => Promise.resolve({ cwd, trustPaths: [], created: false })),
+    recheck: vi.fn<(ws: ResolvedWorkspace) => Promise<void>>(() => Promise.resolve()),
     spawn: vi.fn<(i: SpawnInput) => Promise<{ sessionId: string; bgId: string }>>(() => Promise.resolve({ sessionId: "novo", bgId: "0badf00d" })),
     stop: vi.fn<(b: string) => Promise<void>>(() => Promise.resolve()),
     readRegistry: vi.fn((pid: number) => REG[pid]),
@@ -263,8 +264,19 @@ describe("createCommandHandler", () => {
     const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c2", cwd: "work/app-novo", name: "n", prompt: "p", permissionMode: "plan", create: true };
     const ev = await createCommandHandler(d)(cmd);
     expect(d.workspace).toHaveBeenCalledWith("work/app-novo", true);
-    expect(d.spawn).toHaveBeenCalledWith({ cwd: "/home/leo/dev/work/app-novo", name: "n", prompt: "p", permissionMode: "plan", trustPaths: ["/home/leo/dev/work/app-novo"] });
+    expect(d.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/home/leo/dev/work/app-novo", name: "n", prompt: "p", permissionMode: "plan", trustPaths: ["/home/leo/dev/work/app-novo"] }));
     expect(ev).toMatchObject({ type: "command.ack", result: { cwd: "/home/leo/dev/work/app-novo" } });
+    // o guard do spawn é a recheca da contenção com o workspace resolvido
+    const input = d.spawn.mock.calls[0]?.[0];
+    await input?.guard?.();
+    expect(d.recheck).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/home/leo/dev/work/app-novo", root: "/home/leo/dev" }));
+  });
+
+  it("projeto explícito fora da raiz: spawn sem trustPaths e sem guard (nunca ganha confiança automática)", async () => {
+    const d = deps({ workspace: vi.fn(() => Promise.resolve({ cwd: "/opt/legado", trustPaths: ["/opt/legado"], created: false })) });
+    const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c4", cwd: "/opt/legado", name: "n", prompt: "p", permissionMode: "plan" };
+    await createCommandHandler(d)(cmd);
+    expect(d.spawn).toHaveBeenCalledWith({ cwd: "/opt/legado", name: "n", prompt: "p", permissionMode: "plan" });
   });
 
   it("session.create negado pela contenção → command.error e spawn nunca chamado", async () => {
