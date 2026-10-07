@@ -71,6 +71,28 @@ describe("agent.hello", () => {
     expect(port.of("post")).toHaveLength(0);
   });
 
+  it("hello sem devRoots (agente antigo) → devRootsOf undefined; com devRoots → guarda a lista", async () => {
+    emit(hello());
+    await settle();
+    expect(router.devRootsOf(M)).toBeUndefined();
+    emit(ev("agent.hello", { version: "0.2.0", os: "linux", osUser: "leonardo", projects: [], devRoots: ["/home/leonardo/dev"] }));
+    await settle();
+    expect(router.devRootsOf(M)).toEqual(["/home/leonardo/dev"]);
+    expect(router.discoveredOf(M)).toEqual([]);
+  });
+
+  it("agent.projects atualiza raízes e descobertos, sem postar nada, mesmo com a máquina silenciada", async () => {
+    emit(hello());
+    await settle();
+    db.machines.setFilterAccount(M, "outra@exemplo.com");
+    port.calls.length = 0;
+    emit(ev("agent.projects", { devRoots: ["/d"], projects: ["/d/a", "/d/b/repo"] }));
+    await settle();
+    expect(router.devRootsOf(M)).toEqual(["/d"]);
+    expect(router.discoveredOf(M)).toEqual(["/d/a", "/d/b/repo"]);
+    expect(port.calls).toEqual([]);
+  });
+
   it("campos ausentes viram — no tópico; SO mapeado para nome legível", async () => {
     emit(ev("agent.hello", { version: "0.1.0", os: "win32", osUser: "admin", projects: [] }, "mac/leo"));
     await settle();

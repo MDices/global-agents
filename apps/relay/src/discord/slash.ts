@@ -17,6 +17,8 @@ export const NOT_ALLOWED_TEXT = "sem permissão";
 export const NOT_MACHINE_CHANNEL_TEXT = "use este comando no canal de uma máquina";
 export const NOT_SESSION_THREAD_TEXT = "use este comando dentro da thread de uma sessão";
 export const NO_PROJECTS_TEXT = "esta máquina não informou projetos; rode global-agents install --project <pasta>";
+export const NO_DEV_ROOT_TEXT = "esta máquina não tem pasta dev; rode global-agents install --dev-root <pasta>";
+const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar criar:true";
 export const OFFLINE_TEXT = "máquina offline; o pedido fica na fila por 1 h";
 export const CREATING_TEXT = "criando sessão…";
 /** Validade dos botões de confirmação do `/parar`. */
@@ -32,6 +34,8 @@ const EMBED_DESCRIPTION_MAX = 4096;
 const LIST_MAX = 25;
 const CHOICE_MAX = 100;
 const PROMPT_MAX = 4000;
+/** Tamanho máximo do `projeto` digitado (o agente ainda confere tudo). */
+const PROJECT_MAX = 1024;
 const NAME_WORDS = 6;
 const NAME_MAX = 60;
 /** Limite de `args` do `/claude` (o mesmo do protocolo). */
@@ -66,11 +70,15 @@ export const SLASH_COMMANDS: RESTPostAPIChatInputApplicationCommandsJSONBody[] =
     description: "Cria uma sessão do Claude Code nesta máquina",
     options: [
       { type: ApplicationCommandOptionType.String, name: "prompt", description: "O que a sessão deve fazer", required: true, max_length: PROMPT_MAX },
-      { type: ApplicationCommandOptionType.String, name: "projeto", description: "Pasta do projeto (padrão: a primeira da máquina)", autocomplete: true },
+      {
+        type: ApplicationCommandOptionType.String, name: "projeto", autocomplete: true, max_length: PROJECT_MAX,
+        description: "Projeto sugerido, caminho relativo à pasta dev ou absoluto (padrão: o primeiro da máquina)",
+      },
       {
         type: ApplicationCommandOptionType.String, name: "modo", description: "Modo de permissão (padrão: default)",
         choices: PermissionModeSchema.options.map((m) => ({ name: `${m} · ${MODE_HINT[m]}`, value: m })),
       },
+      { type: ApplicationCommandOptionType.Boolean, name: "criar", description: "Cria a pasta dentro da raiz dev se ela não existir" },
     ],
   },
   { name: "sessoes", description: "Lista as sessões desta máquina" },
@@ -130,6 +138,7 @@ export interface CommandInteraction extends InteractionBase {
   commandName: string;
   options: {
     getString(name: string): string | null;
+    getBoolean(name: string): boolean | null;
     getSubcommand(): string | null;
   };
   reply(view: SlashView, ephemeral: boolean): Promise<unknown>;
@@ -173,7 +182,7 @@ export interface SlashDeps {
   db: Db;
   threads: Pick<ThreadRegistry, "ensureThread">;
   bridge: Pick<CommandBridge, "submit">;
-  router: Pick<Router, "projectsOf" | "refreshTopic">;
+  router: Pick<Router, "projectsOf" | "devRootsOf" | "discoveredOf" | "refreshTopic">;
   port: Pick<DiscordPort, "reply" | "post">;
   /** Só estes usuários usam os comandos (nunca o canal decide). */
   allowedUserIds: readonly string[];
@@ -238,7 +247,11 @@ export function slashResultMessages(command: string, screen: string): string[] {
 
 const ScreenSchema = z.object({ screen: z.string() });
 
-const CreatedSchema = z.object({ sessionId: z.string().min(1), bgId: z.string().min(1).optional() });
+/** `cwd`: a pasta absoluta que o agente resolveu (agentes antigos não mandam; aí vale o que foi pedido). */
+const CreatedSchema = z.object({ sessionId: z.string().min(1), bgId: z.string().min(1).optional(), cwd: z.string().min(1).optional() });
+
+/** Formato aceito para o `projeto` digitado: o relay só confere isto; quem decide a pasta é o agente. */
+const validProject = (p: string, max = PROJECT_MAX): boolean => p !== "" && p.length <= max && /^\P{Cc}*$/u.test(p);
 
 /** Onde mostrar o andamento de um pedido: edição da resposta efêmera, ou reply à mensagem da menção. */
 type Show = (text: string) => void;
@@ -262,7 +275,10 @@ const stopButtons = (id: string, disabled: boolean): SlashButton[] => [
  * - `/novo` e a menção mandam `session.create` pela ponte de comandos (mesma fila offline de 1 h); o `commandId` é o
  *   id da interação/mensagem. No ack, a thread nasce com o `bgId` e a resposta vira o link dela. O token de uma
  *   interação vale 15 min: se o pedido ficar mais que isso na fila, a thread nasce mesmo assim e a edição falha (log).
- * - `projeto` só aceita as pastas do último `agent.hello` da máquina (o agente não confere a pasta).
+ * - `projeto` aceita um item sugerido, um caminho relativo (à primeira pasta dev) ou absoluto; o relay só confere o
+ *   formato e quem decide é o agente (contenção nas pastas dev). Sem `projeto`: o primeiro projeto explícito, senão a
+ *   primeira pasta dev. `criar:true` vira `create` (o agente cria a pasta dentro da pasta dev). Máquina com agente
+ *   anterior às pastas dev (hello sem `devRoots`) só aceita os projetos do hello, porque esse agente não confere nada.
  * - `/parar` pede confirmação com botões que valem 60 s; confirmado, manda `session.stop`.
  * - `/filtro` grava `machines.filter_account` e reaplica o tópico do canal; o router silencia a máquina.
  * - As chamadas ao Discord de uma mesma interação são feitas em série; falhas vão para `log`.
@@ -297,21 +313,35 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
 
   /** Valida e monta o `session.create`; devolve o texto de erro quando não dá. */
   const planCreate = (
-    machine: Machine, prompt: string, projeto: string | null, modo: string | null, commandId: string,
+    machine: Machine, prompt: string, projeto: string | null, modo: string | null, criar: boolean, commandId: string,
   ): { cmd: Extract<RelayCommand, { type: "session.create" }> } | { error: string } => {
     const trimmed = prompt.trim();
     if (trimmed === "") return { error: "o prompt não pode ser vazio" };
     const projects = deps.router.projectsOf(machine.name);
-    const first = projects[0];
-    if (first === undefined) return { error: NO_PROJECTS_TEXT };
-    const cwd = projeto ?? first;
-    if (!projects.includes(cwd)) return { error: `projeto desconhecido nesta máquina: ${cwd}; escolha um dos sugeridos` };
+    const roots = deps.router.devRootsOf(machine.name);
+    const typed = projeto?.trim() ?? "";
+    let cwd: string;
+    if (roots === undefined) {
+      // agente antigo: ele não confere a pasta, então só os projetos que ele mesmo informou
+      const first = projects[0];
+      if (first === undefined) return { error: NO_PROJECTS_TEXT };
+      cwd = typed === "" ? first : typed;
+      if (!projects.includes(cwd)) return { error: `projeto desconhecido nesta máquina: ${cwd}; escolha um dos sugeridos` };
+      if (criar) return { error: LEGACY_CREATE_TEXT };
+    } else if (typed === "") {
+      const fallback = projects[0] ?? roots[0];
+      if (fallback === undefined) return { error: NO_DEV_ROOT_TEXT };
+      cwd = fallback;
+    } else {
+      if (!validProject(typed)) return { error: `projeto inválido: use uma linha só, sem caracteres de controle, até ${PROJECT_MAX} caracteres` };
+      cwd = typed;
+    }
     const mode = PermissionModeSchema.safeParse(modo ?? "default");
     if (!mode.success) return { error: `modo inválido: ${modo ?? ""}` };
     return {
       cmd: {
         ...newEnvelope(relayMachine), type: "session.create", commandId,
-        cwd, name: sessionName(trimmed), prompt: trimmed, permissionMode: mode.data,
+        cwd, name: sessionName(trimmed), prompt: trimmed, permissionMode: mode.data, ...(criar ? { create: true } : {}),
       },
     };
   };
@@ -326,11 +356,12 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
           return;
         }
         const { sessionId, bgId } = created.data;
+        const cwd = created.data.cwd ?? cmd.cwd;
         discord(key, "falha ao criar a thread", async () => {
           let threadId: string;
           try {
             threadId = await deps.threads.ensureThread(machine, {
-              sessionId, name: cmd.name, cwd: cmd.cwd, state: "working", ...(bgId !== undefined ? { bgId } : {}),
+              sessionId, name: cmd.name, cwd, state: "working", ...(bgId !== undefined ? { bgId } : {}),
             });
           } catch (e) {
             log(`${machine}: falha ao criar a thread da sessão ${sessionId}: ${(e as Error).message}`);
@@ -359,7 +390,10 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
   const onNovo = (i: CommandInteraction): void => {
     const machine = machineOr(i);
     if (machine === undefined) return;
-    const plan = planCreate(machine, i.options.getString("prompt") ?? "", i.options.getString("projeto"), i.options.getString("modo"), i.id);
+    const plan = planCreate(
+      machine, i.options.getString("prompt") ?? "", i.options.getString("projeto"), i.options.getString("modo"),
+      i.options.getBoolean("criar") === true, i.id,
+    );
     if ("error" in plan) {
       reply(i, text(plan.error));
       return;
@@ -533,11 +567,18 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       respond([]);
       return;
     }
-    const typed = a.focused.value.toLowerCase();
-    respond(deps.router.projectsOf(machine.name)
-      .filter((p) => p.length <= CHOICE_MAX && p.toLowerCase().includes(typed))
-      .slice(0, LIST_MAX)
-      .map((p) => ({ name: p, value: p })));
+    const typed = a.focused.value.trim();
+    const needle = typed.toLowerCase();
+    const roots = deps.router.devRootsOf(machine.name);
+    const all = [...new Set([
+      ...deps.router.projectsOf(machine.name), ...(roots ?? []), ...deps.router.discoveredOf(machine.name),
+    ])].filter((p) => p.length <= CHOICE_MAX);
+    const matches = all.filter((p) => p.toLowerCase().includes(needle));
+    // Texto livre (pasta nova ou relativa) só vale para agente com pastas dev; ele vai primeiro quando não é
+    // exatamente uma das sugestões.
+    const echo = roots !== undefined && typed !== "" && validProject(typed, CHOICE_MAX)
+      && !all.some((p) => p.toLowerCase() === needle);
+    respond([...(echo ? [typed] : []), ...matches].slice(0, LIST_MAX).map((p) => ({ name: p, value: p })));
   };
 
   const onInteraction = (i: SlashInteraction): void => {
@@ -579,7 +620,7 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       show(MENTION_USAGE_TEXT);
       return;
     }
-    const plan = planCreate(machine, m.text, null, null, m.messageId);
+    const plan = planCreate(machine, m.text, null, null, false, m.messageId);
     if ("error" in plan) {
       show(plan.error);
       return;

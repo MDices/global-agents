@@ -150,7 +150,11 @@ export function toSlashInteraction(i: Interaction): SlashInteraction | undefined
       ...base,
       kind: "command",
       commandName: i.commandName,
-      options: { getString: (name) => i.options.getString(name), getSubcommand: () => i.options.getSubcommand(false) },
+      options: {
+        getString: (name) => i.options.getString(name),
+        getBoolean: (name) => i.options.getBoolean(name),
+        getSubcommand: () => i.options.getSubcommand(false),
+      },
       reply: (v, eph) => i.reply({ ...messageFrom(v), ...ephemeral(eph) }),
       editReply: (v) => i.editReply(messageFrom(v)),
     };

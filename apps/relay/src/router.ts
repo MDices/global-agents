@@ -112,8 +112,15 @@ export interface RouterDeps {
 }
 
 export interface Router {
-  /** Pastas de projeto informadas no último `agent.hello` da máquina. */
+  /** Pastas de projeto explícitas informadas no último `agent.hello` da máquina. */
   projectsOf(machine: string): string[];
+  /**
+   * Raízes dev da máquina (do `agent.hello` ou do `agent.projects` mais recente). `undefined` = agente anterior às
+   * raízes dev: o `/novo` mantém a validação antiga (só os projetos explícitos), porque esse agente não confere a pasta.
+   */
+  devRootsOf(machine: string): string[] | undefined;
+  /** Projetos descobertos dentro das raízes dev, do último `agent.projects`. */
+  discoveredOf(machine: string): string[];
   /** Reaplica o tópico do canal da máquina (ex.: o filtro de conta mudou), pelo mesmo controle de rate limit. */
   refreshTopic(machine: string): void;
   /** Teammates (não encerrados) do último `team.update` do líder `sessionId`; vazio sem time. */
@@ -136,6 +143,8 @@ export function createRouter(deps: RouterDeps): Router {
   const log: Log = deps.log ?? ((m) => { console.error(m); });
   const channelFor = machineChannelResolver(db, port);
   const projects = new Map<string, string[]>();
+  const devRoots = new Map<string, string[]>();
+  const discovered = new Map<string, string[]>();
   /** Desde quando a máquina está offline (para o tópico); ausente = online ou nunca vista. */
   const offlineSince = new Map<string, Date>();
   const queues = new Map<string, Promise<void>>();
@@ -176,6 +185,12 @@ export function createRouter(deps: RouterDeps): Router {
       ...(e.claudeAccount !== undefined ? { claudeAccount: e.claudeAccount } : {}),
     });
     projects.set(machine, [...e.projects]);
+    if (e.devRoots !== undefined) devRoots.set(machine, [...e.devRoots]);
+    else {
+      // agente antigo (ou rebaixado): sem contenção no agente, então nada de caminho livre nem de sugestões descobertas
+      devRoots.delete(machine);
+      discovered.delete(machine);
+    }
     const desired = machineTopic(db, machine);
     const { channelId, topic } = await port.ensureChannel(channelName(machine), desired);
     db.machines.setChannel(machine, channelId);
@@ -193,6 +208,12 @@ export function createRouter(deps: RouterDeps): Router {
     if (owner === undefined || owner === machine) return false;
     log(`${machine}: ${type} de sessão de outra máquina (${owner}); ignorado`);
     return true;
+  };
+
+  const onProjects = (machine: string, e: EventOf<"agent.projects">): Promise<void> => {
+    devRoots.set(machine, [...e.devRoots]);
+    discovered.set(machine, [...e.projects]);
+    return Promise.resolve();
   };
 
   const onSessionList = async (machine: string, e: EventOf<"session.list">): Promise<void> => {
@@ -254,9 +275,11 @@ export function createRouter(deps: RouterDeps): Router {
 
   const handle = (machine: string, e: AgentEvent): Promise<void> => {
     // Filtro de conta: nada de thread nem post para a máquina enquanto a conta dela for outra. O hello sempre passa
-    // (é ele que atualiza a conta); aviso sem sessão é da máquina, não de uma sessão, e também passa. O desfecho de
-    // permissão passa: um card postado antes de o filtro ligar não pode ficar pendente para sempre.
-    const passes = e.type === "agent.hello" || e.type === "permission.resolved" || (e.type === "agent.warning" && e.sessionId === undefined);
+    // (é ele que atualiza a conta), assim como a lista de projetos (não posta nada); aviso sem sessão é da máquina,
+    // não de uma sessão, e também passa. O desfecho de permissão passa: um card postado antes de o filtro ligar não
+    // pode ficar pendente para sempre.
+    const passes = e.type === "agent.hello" || e.type === "agent.projects" || e.type === "permission.resolved"
+      || (e.type === "agent.warning" && e.sessionId === undefined);
     if (!passes && isSilenced(db, machine)) {
       return Promise.resolve();
     }
@@ -266,6 +289,7 @@ export function createRouter(deps: RouterDeps): Router {
     }
     switch (e.type) {
       case "agent.hello": return onHello(machine, e);
+      case "agent.projects": return onProjects(machine, e);
       case "session.list": return onSessionList(machine, e);
       case "session.status": return onStatus(machine, e);
       case "turn.prompt": return onPrompt(machine, e);
@@ -299,6 +323,11 @@ export function createRouter(deps: RouterDeps): Router {
 
   return {
     projectsOf: (machine) => [...(projects.get(machine) ?? [])],
+    devRootsOf: (machine) => {
+      const r = devRoots.get(machine);
+      return r === undefined ? undefined : [...r];
+    },
+    discoveredOf: (machine) => [...(discovered.get(machine) ?? [])],
     teamMembersOf: (sessionId) => [...(rosters.get(sessionId) ?? [])],
     refreshTopic: setTopic,
     async idle() {
