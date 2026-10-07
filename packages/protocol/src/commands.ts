@@ -9,7 +9,9 @@ export const SlashCommandNameSchema = z.enum(SLASH_ALLOWLIST);
 export type SlashCommandName = z.infer<typeof SlashCommandNameSchema>;
 const cmd = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) => EnvelopeSchema.extend({ type: z.literal(type), commandId: z.string().min(1), ...shape });
 export const RelayCommandSchema = z.discriminatedUnion("type", [
-  cmd("session.create", { cwd: z.string().min(1), name: z.string().min(1).max(100), prompt: z.string().min(1).max(100_000), permissionMode: PermissionModeSchema }),
+  cmd("session.create", { cwd: z.string().min(1).max(4096), name: z.string().min(1).max(100), prompt: z.string().min(1).max(100_000), permissionMode: PermissionModeSchema,
+    /** Cria a pasta se ela não existir (só dentro de uma raiz dev; o agente decide). */
+    create: z.boolean().optional() }),
   cmd("session.send", { sessionId: z.string().min(1), text: z.string().min(1).max(100_000) }),
   cmd("session.stop", { sessionId: z.string().min(1) }),
   cmd("session.slash", { sessionId: z.string().min(1), command: SlashCommandNameSchema, args: z.string().max(500).regex(/^\P{Cc}*$/u, "sem caracteres de controle").optional() }),

@@ -7,6 +7,21 @@ describe("eventos", () => {
       claudeVersion: "2.1.291", claudeAccount: "leo@x.com", projects: ["/home/leonardo/dev"] });
     expect(r.success).toBe(true);
   });
+  it("agent.hello sem devRoots continua válido (agente anterior às raízes dev) e com devRoots também", () => {
+    const base = { ...env(), type: "agent.hello", version: "0.1.0", os: "linux", osUser: "leonardo", projects: [] };
+    const legado = AgentEventSchema.safeParse(base);
+    expect(legado.success).toBe(true);
+    expect(legado.success && legado.data.type === "agent.hello" ? legado.data.devRoots : "x").toBeUndefined();
+    const novo = AgentEventSchema.safeParse({ ...base, devRoots: ["/home/leonardo/dev"] });
+    expect(novo.success && novo.data.type === "agent.hello" ? novo.data.devRoots : undefined).toEqual(["/home/leonardo/dev"]);
+    expect(AgentEventSchema.safeParse({ ...base, devRoots: "/home/leonardo/dev" }).success).toBe(false);
+  });
+  it("agent.projects exige devRoots e projects como listas de texto", () => {
+    expect(AgentEventSchema.safeParse({ ...env(), type: "agent.projects", devRoots: ["/d"], projects: ["/d/a", "/d/b/repo"] }).success).toBe(true);
+    expect(AgentEventSchema.safeParse({ ...env(), type: "agent.projects", devRoots: [], projects: [] }).success).toBe(true);
+    expect(AgentEventSchema.safeParse({ ...env(), type: "agent.projects", projects: [] }).success).toBe(false);
+    expect(AgentEventSchema.safeParse({ ...env(), type: "agent.projects", devRoots: [], projects: [1] }).success).toBe(false);
+  });
   it("aceita session.list com campos opcionais ausentes", () => {
     const r = AgentEventSchema.safeParse({ ...env(), type: "session.list", sessions: [
       { sessionId: "u1", name: "a", cwd: "/p", kind: "interactive", status: "busy" },
