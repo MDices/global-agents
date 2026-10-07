@@ -24,6 +24,11 @@ export interface SpawnInput {
   name: string;
   prompt: string;
   permissionMode: PermissionMode;
+  /**
+   * Pasta dentro de uma raiz dev: se o Claude Code recusar por falta de confiança, estes caminhos são marcados como
+   * confiáveis (`deps.trust`) e o `--bg` é tentado mais uma vez. Ausente ou vazio: nunca grava confiança.
+   */
+  trustPaths?: string[];
 }
 
 async function isDirectory(path: string): Promise<boolean> {
@@ -39,17 +44,27 @@ function parseBgId(output: string): string | undefined {
   return (/backgrounded\s*[·•]\s*([0-9a-f]{8})/.exec(output) ?? /claude attach ([0-9a-f]{8})/.exec(output))?.[1];
 }
 
+const NOT_TRUSTED = "Workspace not trusted";
+
 export async function spawnSession(
   input: SpawnInput,
-  deps: { run: SpawnRun; inventory: Pick<Inventory, "waitFor"> },
+  deps: { run: SpawnRun; inventory: Pick<Inventory, "waitFor">; trust?: (paths: string[]) => Promise<boolean> },
 ): Promise<{ sessionId: string; bgId: string }> {
   if (!(await isDirectory(input.cwd))) throw new Error(`pasta não encontrada: ${input.cwd}`);
-  const r = await deps.run(["--bg", "--name", input.name, "--permission-mode", input.permissionMode, "--", input.prompt], {
-    cwd: input.cwd,
-    timeoutMs: 60000,
-  });
-  const out = `${r.stdout}\n${r.stderr}`;
-  if (out.includes("Workspace not trusted")) throw new WorkspaceNotTrustedError(input.cwd);
+  const bg = async (): Promise<string> => {
+    const r = await deps.run(["--bg", "--name", input.name, "--permission-mode", input.permissionMode, "--", input.prompt], {
+      cwd: input.cwd,
+      timeoutMs: 60000,
+    });
+    return `${r.stdout}\n${r.stderr}`;
+  };
+  let out = await bg();
+  // Pasta nova sem git herda a confiança da raiz dev; repositório git (ou raiz não confiável) não herda.
+  const trustPaths = input.trustPaths ?? [];
+  if (out.includes(NOT_TRUSTED) && trustPaths.length > 0 && deps.trust !== undefined && (await deps.trust(trustPaths))) {
+    out = await bg();
+  }
+  if (out.includes(NOT_TRUSTED)) throw new WorkspaceNotTrustedError(input.cwd);
   const bgId = parseBgId(out);
   if (bgId === undefined) throw new Error(`claude --bg não devolveu o id da sessão: ${out.trim().slice(0, 300)}`);
   const info = await deps.inventory.waitFor((s) => s.bgId === bgId, 30000).catch(() => {

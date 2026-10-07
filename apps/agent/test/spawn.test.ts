@@ -73,6 +73,52 @@ describe("spawnSession", () => {
     await expect(p).rejects.toThrow(/não é confiável.*`claude`/);
   });
 
+  describe("confiança em pasta de raiz dev", () => {
+    const NOT_TRUSTED = ok("Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.", 1);
+
+    it("recusa por confiança com trustPaths → grava a confiança e tenta uma vez mais", async () => {
+      const run = vi.fn().mockResolvedValueOnce(NOT_TRUSTED).mockResolvedValueOnce(ok(OK_OUT));
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      const r = await spawnSession({ ...input, trustPaths: ["/d/app", "/real/d/app"] }, { run, inventory, trust });
+      expect(r.bgId).toBe("85285a68");
+      expect(trust).toHaveBeenCalledWith(["/d/app", "/real/d/app"]);
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("continua sem confiança depois de gravar → WorkspaceNotTrustedError, sem terceira tentativa", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const { inventory } = fakeInventory();
+      await expect(spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust: () => Promise.resolve(true) }))
+        .rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("trust devolve false (estado ilegível) → não tenta de novo", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const { inventory } = fakeInventory();
+      await expect(spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust: () => Promise.resolve(false) }))
+        .rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("sem trustPaths (pasta fora das raízes) → nunca grava confiança", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      await expect(spawnSession(input, { run, inventory, trust })).rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(trust).not.toHaveBeenCalled();
+    });
+
+    it("pasta já confiável → não grava nada", async () => {
+      const run = vi.fn().mockResolvedValue(ok(OK_OUT));
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      await spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust });
+      expect(trust).not.toHaveBeenCalled();
+    });
+  });
+
   it("cwd inexistente falha antes de executar", async () => {
     const run = vi.fn();
     const { inventory } = fakeInventory();
