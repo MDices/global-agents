@@ -5,7 +5,12 @@ import path from "node:path";
 export const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const NOT_EXISTS_TEXT = "pasta não existe; use criar:true no /novo para criá-la";
-export const NO_DEV_ROOT_TEXT = "esta máquina não tem pasta dev; rode global-agents install --dev-root <pasta>";
+/** Sem pasta dev: o comando certo depende do sistema (o instalador do Windows é o script PowerShell). */
+export function noDevRootText(windows: boolean): string {
+  return windows
+    ? "esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`"
+    : "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`";
+}
 
 /** O que a resolução usa de `node:path` (o real é o da plataforma; os testes injetam `path.win32`). */
 export type PathApi = Pick<typeof path, "resolve" | "relative" | "isAbsolute" | "dirname" | "sep">;
@@ -110,7 +115,7 @@ export async function resolveWorkspace(cwd: string, create: boolean, policy: Wor
   if (p.isAbsolute(cwd)) abs = p.resolve(cwd);
   else {
     const first = roots[0];
-    if (first === undefined) throw new Error(`${NO_DEV_ROOT_TEXT} (ou informe um caminho absoluto de um projeto configurado)`);
+    if (first === undefined) throw new Error(`${noDevRootText(isWin(p))} (ou informe um caminho absoluto de um projeto configurado)`);
     abs = p.resolve(first, cwd);
   }
 

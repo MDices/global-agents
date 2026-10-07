@@ -1,8 +1,8 @@
 import { chmodSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { INSTALL_REQUIRES_TEXT, installConfig, InstallUsageError, loadConfig, saveConfig } from "../src/config.js";
+import { INSTALL_REQUIRES_TEXT, installConfig, InstallUsageError, loadConfig, normalizeDir, saveConfig } from "../src/config.js";
 
 function tmpConfig(content: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "ga-cfg-"));
@@ -104,5 +104,35 @@ describe("installConfig", () => {
     expect(moved.cfg).toMatchObject({ token: "velho", relayUrl: "wss://9.9.9.9:8443/ws" });
     expect(moved.cfg).not.toHaveProperty("relayCertFingerprint");
     expect(moved.warnings).toHaveLength(1);
+  });
+});
+
+describe("normalizeDir", () => {
+  it("Linux: ~ e ~/x viram o home; relativo resolve contra cwd; absoluto fica", () => {
+    const o = { path: path.posix, home: "/home/x", cwd: "/home/x/tmp" };
+    expect(normalizeDir("~", o)).toBe("/home/x");
+    expect(normalizeDir("~/dev", o)).toBe("/home/x/dev");
+    expect(normalizeDir("  ~/dev/  ", o)).toBe("/home/x/dev");
+    expect(normalizeDir("dev", o)).toBe("/home/x/tmp/dev");
+    expect(normalizeDir("/home/x/dev/../dev", o)).toBe("/home/x/dev");
+    expect(normalizeDir("~fulano/dev", o)).toBe("/home/x/tmp/~fulano/dev"); // ~usuario não é expandido
+  });
+
+  it("Windows: C:\\dev, C:/dev e c:\\Dev viram caminho nativo com drive maiúsculo; ~ vira o perfil", () => {
+    const o = { path: path.win32, home: "C:\\Users\\Leo", cwd: "C:\\Users\\Leo\\Downloads" };
+    expect(normalizeDir("C:\\dev", o)).toBe("C:\\dev");
+    expect(normalizeDir("C:/dev", o)).toBe("C:\\dev");
+    expect(normalizeDir("c:\\Dev\\", o)).toBe("C:\\Dev");
+    expect(normalizeDir("d:/trabalho/projetos", o)).toBe("D:\\trabalho\\projetos");
+    expect(normalizeDir("~/dev", o)).toBe("C:\\Users\\Leo\\dev");
+    expect(normalizeDir("~\\dev", o)).toBe("C:\\Users\\Leo\\dev");
+    expect(normalizeDir("dev", o)).toBe("C:\\Users\\Leo\\Downloads\\dev");
+  });
+
+  it("installConfig grava as raízes normalizadas e sem repetição", () => {
+    const prev = loadConfig(tmpConfig({ relayUrl: "ws://h:1/ws", token: "t" }));
+    const home = normalizeDir("~");
+    const { cfg } = installConfig(prev, { projects: [], devRoots: ["~/dev", `${home}/dev/`, "/srv/x/../y"] });
+    expect(cfg.devRoots).toEqual([join(home, "dev"), path.resolve("/srv/y")]);
   });
 });

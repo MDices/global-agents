@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFil
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isInside, NO_DEV_ROOT_TEXT, NOT_EXISTS_TEXT, resolveWorkspace, type WorkspaceFs } from "../src/projects/workspace.js";
+import { isInside, noDevRootText, NOT_EXISTS_TEXT, resolveWorkspace, type WorkspaceFs } from "../src/projects/workspace.js";
 
 /** Raiz dev temporária real (com `realpath`: o tmp do macOS é symlink) e uma pasta de fora. */
 function sandbox(): { base: string; root: string; outside: string } {
@@ -36,7 +36,8 @@ describe("resolveWorkspace", () => {
   });
 
   it("relativo sem raiz dev → erro pedindo --dev-root", async () => {
-    await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [] })).rejects.toThrow(NO_DEV_ROOT_TEXT);
+    await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [], path: path.posix })).rejects.toThrow(noDevRootText(false));
+    expect(noDevRootText(false)).toBe("esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`");
   });
 
   it("pasta fora das raízes → negada", async () => {
@@ -62,6 +63,13 @@ describe("resolveWorkspace", () => {
     await expect(resolveWorkspace(join(root, "atalho"), false, { devRoots: [root], projects: [] })).rejects.toThrow(/fora das pastas dev/);
     await expect(resolveWorkspace("atalho/novo", true, { devRoots: [root], projects: [] })).rejects.toThrow(/fora das pastas dev/);
     expect(existsSync(join(outside, "novo"))).toBe(false);
+  });
+
+  it("subpasta funda (3+ níveis, fora da varredura) dentro da raiz é aceita sem cadastro", async () => {
+    const { root } = sandbox();
+    mkdirSync(join(root, "work", "cliente", "app", "pacote"), { recursive: true });
+    const r = await resolveWorkspace("work/cliente/app/pacote", false, { devRoots: [root], projects: [] });
+    expect(r).toMatchObject({ cwd: join(root, "work", "cliente", "app", "pacote"), root, created: false });
   });
 
   posixOnly("raiz com symlink no caminho → pastas dentro dela continuam permitidas", async () => {
@@ -153,6 +161,18 @@ describe("resolveWorkspace no Windows (path.win32 injetado)", () => {
     await expect(resolveWorkspace("C:\\Outro", false, policy)).rejects.toThrow(/fora/);
     await expect(resolveWorkspace("D:\\Users\\Leo\\Dev", false, policy)).rejects.toThrow(/fora/);
     await expect(resolveWorkspace("..\\..\\Outro", false, policy)).rejects.toThrow(/fora/);
+  });
+
+  it("relativo sem raiz → instrução do instalador do Windows", async () => {
+    await expect(resolveWorkspace("gestai", false, { devRoots: [], projects: [], path: W, fs: winFs(disk) }))
+      .rejects.toThrow(noDevRootText(true));
+    expect(noDevRootText(true)).toBe("esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
+  });
+
+  it("subpasta funda digitada à mão (além da varredura) é aceita sem cadastro", async () => {
+    const fs = winFs([...disk, "C:\\Users\\Leo\\Dev\\a", "C:\\Users\\Leo\\Dev\\a\\b", "C:\\Users\\Leo\\Dev\\a\\b\\c"]);
+    const r = await resolveWorkspace("a/b/c", false, { devRoots: ["C:\\Users\\Leo\\Dev"], projects: [], path: W, fs });
+    expect(r.cwd).toBe("C:\\Users\\Leo\\Dev\\a\\b\\c");
   });
 
   it("projeto explícito casa sem diferenciar maiúsculas", async () => {

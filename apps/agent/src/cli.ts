@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONFIG_PATH, installConfig, InstallUsageError, loadConfig, saveConfig } from "./config.js";
+import { DEFAULT_CONFIG_PATH, installConfig, InstallUsageError, loadConfig, normalizeDir, saveConfig } from "./config.js";
 import { defaultDeps, runDoctor } from "./doctor.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
@@ -19,7 +19,8 @@ comandos:
   install --relay <url> [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--dev-root <dir>]... [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
             --dev-root (repetível) define as pastas raiz de desenvolvimento: tudo dentro delas
-            pode virar sessão pelo /novo do Discord, inclusive pasta nova (criar:true);
+            pode virar sessão pelo /novo do Discord, inclusive pasta nova (criar:true), sem
+            cadastrar projeto nenhum; aceita ~/dev, caminho relativo e, no Windows, C:/dev;
             com config já gravada, --relay, --token e --fingerprint são opcionais (usa os salvos),
             então "install --dev-root <dir>" só troca as raízes; --project e --dev-root
             substituem a lista correspondente, e quem não for passado mantém a anterior;
@@ -155,8 +156,9 @@ async function install(a: Args): Promise<void> {
   const path = configPath(a);
   // Reinstalar mantém o que não foi passado agora (relay, token, fingerprint, machineName, porta, dataDir…).
   const previous = existsSync(path) ? loadConfig(path) : undefined;
-  const projects = (a.flags.get("--project") ?? []).map((p) => resolve(p));
-  const devRoots = [...new Set((a.flags.get("--dev-root") ?? []).map((p) => resolve(p)))];
+  // `~`, relativo e (no Windows) `C:/dev` viram caminho absoluto nativo antes de ir para a config.
+  const projects = (a.flags.get("--project") ?? []).map((p) => normalizeDir(p));
+  const devRoots = [...new Set((a.flags.get("--dev-root") ?? []).map((p) => normalizeDir(p)))];
   checkDevRoots(devRoots);
   let result: ReturnType<typeof installConfig>;
   try {

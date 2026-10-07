@@ -11,7 +11,7 @@ import { resumeViaPty } from "./claude/fallback-pty.js";
 import { runSlash } from "./claude/slash.js";
 import { stopSession } from "./claude/stop.js";
 import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
-import type { AgentConfig } from "./config.js";
+import { normalizeDir, type AgentConfig } from "./config.js";
 import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
 import { PendingPermissions } from "./permissions/pending.js";
@@ -106,6 +106,8 @@ async function claudeAccount(run: RunFn): Promise<string | undefined> {
 
 export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Agent {
   const machine = machineId(cfg);
+  // Config editada à mão pode ter `~/dev` ou `C:/dev`: tudo daqui em diante usa o caminho absoluto nativo.
+  const devRoots = [...new Set(cfg.devRoots.map((r) => normalizeDir(r)))];
   const run: SpawnRun =
     deps.run ?? ((args, opts) => runClaude(args, { timeoutMs: 15000, ...opts, claudeBin: cfg.claudeBin }));
   const inventory: InventoryLike = deps.inventory ?? new Inventory({ claudeBin: cfg.claudeBin });
@@ -120,7 +122,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     machine,
     inventory,
     inject: injectPrompt,
-    workspace: (cwd, create) => resolveWorkspace(cwd, create, { devRoots: cfg.devRoots, projects: cfg.projects }),
+    workspace: (cwd, create) => resolveWorkspace(cwd, create, { devRoots, projects: cfg.projects }),
     spawn: (input) => spawnSession(input, { run, inventory, trust: (paths) => grantTrust(paths) }),
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),
@@ -152,16 +154,16 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     ...(cVersion !== undefined ? { claudeVersion: cVersion } : {}),
     ...(account !== undefined ? { claudeAccount: account } : {}),
     projects: cfg.projects,
-    devRoots: cfg.devRoots,
+    devRoots,
   });
 
-  const projectsEvent = (): AgentEvent => ({ ...newEnvelope(machine), type: "agent.projects", devRoots: cfg.devRoots, projects: discovered });
+  const projectsEvent = (): AgentEvent => ({ ...newEnvelope(machine), type: "agent.projects", devRoots, projects: discovered });
 
   /** Varre as raízes; devolve `true` se a lista mudou. Falha vira log e mantém a lista anterior. */
   const scanProjects = async (): Promise<boolean> => {
-    if (cfg.devRoots.length === 0) return false;
+    if (devRoots.length === 0) return false;
     try {
-      const next = await discover(cfg.devRoots);
+      const next = await discover(devRoots);
       if (next.length === discovered.length && next.every((p, i) => p === discovered[i])) return false;
       discovered = next;
       return true;
@@ -253,7 +255,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       inventory.start();
 
       accountTimer = setInterval(() => { void recheckAccount(); }, accountCheckMs);
-      if (cfg.devRoots.length > 0) {
+      if (devRoots.length > 0) {
         scanTimer = setInterval(() => { void rescan(); }, projectsScanMs);
         scanTimer.unref();
       }

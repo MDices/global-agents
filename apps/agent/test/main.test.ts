@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +131,13 @@ describe("createAgent", () => {
       expect(client.types()).toEqual(["agent.hello", "agent.projects"]);
       expect(client.sent[1]).toMatchObject({ projects: ["/home/x/dev/a", "/home/x/dev/novo"] });
       expect(discover).toHaveBeenCalledTimes(3);
+    });
+
+    it("raiz editada à mão na config (~/dev, repetida) vira caminho absoluto no hello e na varredura", async () => {
+      const discover = vi.fn(() => Promise.resolve([]));
+      const { client } = await setup({ discover }, { devRoots: ["~/dev", join(homedir(), "dev")] });
+      expect(client.sent[0]).toMatchObject({ devRoots: [join(homedir(), "dev")] });
+      expect(discover).toHaveBeenCalledWith([join(homedir(), "dev")]);
     });
 
     it("sem raízes dev não varre nada (agent.projects na conexão vai vazio)", async () => {

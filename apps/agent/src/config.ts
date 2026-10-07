@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import path, { dirname, join } from "node:path";
 import { z } from "zod";
 
 const DEFAULT_DIR = join(homedir(), ".global-agents");
@@ -44,6 +44,29 @@ export function loadConfig(path: string = DEFAULT_CONFIG_PATH): AgentConfig {
   return parseConfig(raw);
 }
 
+export interface NormalizeOptions {
+  /** `path.win32` ou `path.posix` (padrão: o da plataforma). */
+  path?: typeof path.posix;
+  home?: string;
+  /** Base para caminho relativo (padrão: a pasta atual). */
+  cwd?: string;
+}
+
+/**
+ * Caminho de pasta digitado pelo usuário → absoluto no formato nativo: expande `~` (sozinho, `~/…` ou `~\…`) para o
+ * home, resolve relativo contra `cwd` e, no Windows, aceita `/` e grava com `\` e a letra do drive maiúscula
+ * (`c:/Dev` → `C:\Dev`).
+ */
+export function normalizeDir(raw: string, opts: NormalizeOptions = {}): string {
+  const p = opts.path ?? path;
+  const home = opts.home ?? homedir();
+  const cwd = opts.cwd ?? process.cwd();
+  const t = raw.trim();
+  const expanded = t === "~" ? home : /^~[\\/]/.test(t) ? p.join(home, t.slice(2)) : t;
+  const abs = p.resolve(cwd, expanded);
+  return p === path.win32 ? abs.replace(/^[a-z]:/, (d) => d.toUpperCase()) : abs;
+}
+
 export const INSTALL_REQUIRES_TEXT = "install exige --relay e --token (ou a variável GLOBAL_AGENTS_TOKEN)";
 
 /** Erro de uso do `install` (a CLI mostra o uso junto). */
@@ -75,7 +98,7 @@ export function installConfig(previous: AgentConfig | undefined, input: InstallI
     delete base.relayCertFingerprint;
     warnings.push("relay mudou; o fingerprint anterior foi descartado — passe --fingerprint para fixar o certificado novo");
   }
-  const devRoots = input.devRoots ?? [];
+  const devRoots = [...new Set((input.devRoots ?? []).map((r) => normalizeDir(r)))];
   const cfg = parseConfig({
     ...base,
     relayUrl,
