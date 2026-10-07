@@ -22,7 +22,11 @@ export type TeamTask = z.infer<typeof TeamTaskSchema>;
 const ev = <T extends string, S extends z.ZodRawShape>(type: T, shape: S) => EnvelopeSchema.extend({ type: z.literal(type), ...shape });
 export const AgentEventSchema = z.discriminatedUnion("type", [
   ev("agent.hello", { version: z.string(), os: z.enum(["linux", "win32", "darwin"]), osUser: z.string(), claudeVersion: z.string().optional(),
-    claudeAccount: z.string().optional(), projects: z.array(z.string()) }),
+    claudeAccount: z.string().optional(), projects: z.array(z.string()),
+    /** Pastas raiz de desenvolvimento; ausente = agente anterior às raízes dev (o relay mantém a validação antiga). */
+    devRoots: z.array(z.string()).optional() }),
+  /** Raízes dev e projetos descobertos dentro delas (caminhos absolutos); enviado na conexão e quando a lista muda. */
+  ev("agent.projects", { devRoots: z.array(z.string()), projects: z.array(z.string()) }),
   ev("agent.warning", { message: z.string(), sessionId: z.string().optional() }),
   ev("session.list", { sessions: z.array(SessionInfoSchema) }),
   ev("session.status", { sessionId: z.string(), name: z.string(), cwd: z.string(), state: SessionStateSchema, snippet: z.string().optional() }),

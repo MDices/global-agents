@@ -7,6 +7,7 @@ import { ThreadRegistry } from "../src/discord/threads.js";
 import {
   CONFIRM_TIMEOUT_MS,
   CREATING_TEXT,
+  noDevRootText,
   NO_PROJECTS_TEXT,
   NOT_ALLOWED_TEXT,
   NOT_MACHINE_CHANNEL_TEXT,
@@ -68,10 +69,12 @@ interface FakeCommand extends CommandInteraction {
   edits: SlashView[];
 }
 
-function command(commandName: string, opts: Record<string, string> = {}, over: Partial<CommandInteraction> = {}): FakeCommand {
+function command(commandName: string, opts: Record<string, string | boolean> = {}, over: Partial<CommandInteraction> = {}): FakeCommand {
   const replies: Reply[] = [];
   const edits: SlashView[] = [];
-  const { sub, ...strings } = opts;
+  const { sub, ...rest } = opts;
+  const strings = Object.fromEntries(Object.entries(rest).filter((e): e is [string, string] => typeof e[1] === "string"));
+  const booleans = Object.fromEntries(Object.entries(rest).filter((e): e is [string, boolean] => typeof e[1] === "boolean"));
   return {
     kind: "command",
     id: `int-${++seq}`,
@@ -80,7 +83,8 @@ function command(commandName: string, opts: Record<string, string> = {}, over: P
     user: { id: ALLOWED, username: "leonardo" },
     options: {
       getString: (name) => strings[name] ?? null,
-      getSubcommand: () => sub ?? null,
+      getBoolean: (name) => booleans[name] ?? null,
+      getSubcommand: () => (typeof sub === "string" ? sub : null),
     },
     reply: async (view, ephemeral) => { replies.push({ view, ephemeral }); },
     editReply: async (view) => { edits.push(view); },
@@ -202,7 +206,11 @@ describe("SLASH_COMMANDS", () => {
   it("define /novo, /sessoes, /parar, /filtro e /claude com as opções combinadas", () => {
     expect(SLASH_COMMANDS.map((c) => c.name)).toEqual(["novo", "sessoes", "parar", "filtro", "claude"]);
     const novo = SLASH_COMMANDS[0];
-    expect(novo?.options?.map((o) => o.name)).toEqual(["prompt", "projeto", "modo"]);
+    expect(novo?.options?.map((o) => o.name)).toEqual(["prompt", "projeto", "modo", "criar"]);
+    expect(novo?.options?.find((o) => o.name === "criar")).toMatchObject({
+      type: 5, description: "Cria a pasta dentro da raiz dev se ela não existir",
+    });
+    for (const o of novo?.options ?? []) expect(o.description.length).toBeLessThanOrEqual(100);
     expect(JSON.stringify(novo)).toContain("\"max_length\":4000");
     expect(JSON.stringify(novo)).toContain("\"autocomplete\":true");
     for (const mode of ["default", "acceptEdits", "plan", "bypassPermissions"]) expect(JSON.stringify(novo)).toContain(`"value":"${mode}"`);
@@ -259,7 +267,7 @@ describe("/novo", () => {
     expect(lastCmd()).toMatchObject({ cwd: PROJECTS[1], permissionMode: "acceptEdits" });
   });
 
-  it("projeto que a máquina não informou é recusado (o agente não confere a pasta)", async () => {
+  it("agente antigo (hello sem devRoots): projeto que a máquina não informou é recusado (esse agente não confere a pasta)", async () => {
     const i = command("novo", { prompt: "oi", projeto: "/etc" });
     await slash.onInteraction(i);
     await settle();
@@ -379,6 +387,221 @@ describe("autocomplete de projeto", () => {
     await slash.onInteraction(a);
     await settle();
     expect(a.choices).toEqual([[]]);
+  });
+});
+
+describe("/novo com pastas dev", () => {
+  const ROOT = "/home/leonardo/dev";
+  const helloDev = (projects: string[], devRoots: string[]): AgentEvent =>
+    ev("agent.hello", { version: "0.2.0", os: "linux", osUser: "leonardo", claudeAccount: ACCOUNT, projects, devRoots });
+  const projectsEv = (devRoots: string[], projects: string[]): AgentEvent => ev("agent.projects", { devRoots, projects });
+  const use = async (...events: AgentEvent[]): Promise<void> => {
+    for (const e of events) hub.emit("event", M, e);
+    await router.idle();
+  };
+
+  it("caminho relativo é repassado como foi digitado (quem resolve é o agente)", async () => {
+    await use(helloDev([], [ROOT]));
+    const i = command("novo", { prompt: "oi", projeto: " work/app-novo " });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies).toEqual([{ view: { content: CREATING_TEXT }, ephemeral: true }]);
+    expect(lastCmd()).toMatchObject({ type: "session.create", cwd: "work/app-novo" });
+    expect(lastCmd()).not.toHaveProperty("create");
+  });
+
+  it("caminho absoluto fora das sugestões também é repassado (sem 'projeto desconhecido')", async () => {
+    await use(helloDev([], [ROOT]));
+    const i = command("novo", { prompt: "oi", projeto: "/etc" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(lastCmd()).toMatchObject({ cwd: "/etc" });
+  });
+
+  it("criar:true vira create: true no comando; criar:false não manda o campo", async () => {
+    await use(helloDev([], [ROOT]));
+    await slash.onInteraction(command("novo", { prompt: "oi", projeto: "app-novo", criar: true }));
+    expect(lastCmd()).toMatchObject({ cwd: "app-novo", create: true });
+    await slash.onInteraction(command("novo", { prompt: "oi", projeto: "app-novo", criar: false }));
+    expect(lastCmd()).not.toHaveProperty("create");
+  });
+
+  it("sem projeto: a primeira pasta dev, mesmo havendo projetos explícitos; sem raiz, o primeiro explícito", async () => {
+    await use(helloDev(["/opt/legado"], [ROOT, "/srv/outra"]));
+    await slash.onInteraction(command("novo", { prompt: "oi" }));
+    expect(lastCmd()).toMatchObject({ cwd: ROOT });
+    await use(helloDev(["/opt/legado"], []));
+    await slash.onInteraction(command("novo", { prompt: "oi" }));
+    expect(lastCmd()).toMatchObject({ cwd: "/opt/legado" });
+  });
+
+  it("sem projeto, sem pasta dev e sem explícito → erro com o comando do Linux", async () => {
+    await use(helloDev([], []));
+    const i = command("novo", { prompt: "oi" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(hub.sent).toEqual([]);
+    expect(i.replies).toEqual([{ view: { content: noDevRootText("linux") }, ephemeral: true }]);
+    expect(i.replies[0]?.view.content).toContain("systemctl --user restart global-agents");
+  });
+
+  it("máquina Windows sem pasta dev → erro com o comando do instalador PowerShell", async () => {
+    await use(ev("agent.hello", { version: "0.2.0", os: "win32", osUser: "leo", claudeAccount: ACCOUNT, projects: [], devRoots: [] }));
+    const i = command("novo", { prompt: "oi" });
+    await slash.onInteraction(i);
+    await settle();
+    expect(i.replies[0]?.view.content).toContain("`.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
+    expect(noDevRootText("win32")).toBe(i.replies[0]?.view.content);
+    expect(noDevRootText("darwin")).toContain("e reinicie o agente");
+    expect(noDevRootText(null)).toBe(noDevRootText("linux"));
+  });
+
+  it("projeto com caractere de controle ou longo demais → recusado no relay", async () => {
+    await use(helloDev([], [ROOT]));
+    for (const projeto of ["a\nb", "x\u0007", "a".repeat(1025)]) {
+      const i = command("novo", { prompt: "oi", projeto });
+      await slash.onInteraction(i);
+      await settle();
+      expect(i.replies[0]?.view.content).toContain("projeto inválido");
+    }
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("agente antigo com criar:true → recusa explicando que precisa atualizar", async () => {
+    const i = command("novo", { prompt: "oi", projeto: PROJECTS[0] ?? "", criar: true });
+    await slash.onInteraction(i);
+    await settle();
+    expect(hub.sent).toEqual([]);
+    expect(i.replies[0]?.view.content).toContain("atualize o agente");
+  });
+
+  it("o ack com cwd resolvido pelo agente vira o cwd da thread", async () => {
+    await use(helloDev([], [ROOT]));
+    const spy = vi.spyOn(threads, "ensureThread");
+    const i = command("novo", { prompt: "oi", projeto: "work/app-novo", criar: true });
+    await slash.onInteraction(i);
+    await ackOf(i.id, { sessionId: "sess-9", bgId: "b9", cwd: `${ROOT}/work/app-novo` });
+    await settle();
+    expect(spy).toHaveBeenCalledWith(M, expect.objectContaining({ sessionId: "sess-9", cwd: `${ROOT}/work/app-novo` }));
+  });
+
+  it("offline: criar e o caminho relativo sobrevivem à fila e ao reenvio", async () => {
+    await use(helloDev([], [ROOT]));
+    hub.online.delete(M);
+    const i = command("novo", { prompt: "oi", projeto: "app-novo", criar: true });
+    await slash.onInteraction(i);
+    await settle();
+    expect(hub.sent).toEqual([]);
+    hub.online.add(M);
+    await bridge.onMachineOnline(M);
+    expect(lastCmd()).toMatchObject({ type: "session.create", commandId: i.id, cwd: "app-novo", create: true });
+  });
+
+  it("menção usa o mesmo padrão (primeira pasta dev) e nunca cria", async () => {
+    await use(helloDev([], [ROOT]));
+    await slash.onMention({ messageId: "msg-1", channelId: CH, authorId: ALLOWED, isBot: false, text: "roda os testes" });
+    expect(lastCmd()).toMatchObject({ cwd: ROOT });
+    expect(lastCmd()).not.toHaveProperty("create");
+  });
+
+  describe("autocomplete", () => {
+    it("explícitos + raízes + descobertos, filtrados e sem repetição; evento agent.projects atualiza as sugestões", async () => {
+      await use(helloDev(["/opt/legado"], [ROOT]));
+      const before = autocomplete("");
+      await slash.onInteraction(before);
+      await use(projectsEv([ROOT], [`${ROOT}/gestai`, `${ROOT}/work`, `${ROOT}/work/app`, "/opt/legado"]));
+      const after = autocomplete("");
+      await slash.onInteraction(after);
+      const filtered = autocomplete("WORK");
+      await slash.onInteraction(filtered);
+      await settle();
+      expect(before.choices[0]?.map((c) => c.value)).toEqual(["/opt/legado", ROOT]);
+      expect(after.choices[0]?.map((c) => c.value)).toEqual(["/opt/legado", ROOT, `${ROOT}/gestai`, `${ROOT}/work`, `${ROOT}/work/app`]);
+      expect(filtered.choices[0]?.map((c) => c.value)).toEqual(["WORK", `${ROOT}/work`, `${ROOT}/work/app`]);
+    });
+
+    it("texto que não bate com nada vira a primeira (e única) opção; texto igual a uma sugestão não ecoa", async () => {
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
+      const novo = autocomplete("app-novo");
+      await slash.onInteraction(novo);
+      const igual = autocomplete(`${ROOT}/gestai`);
+      await slash.onInteraction(igual);
+      const vazio = autocomplete("   ");
+      await slash.onInteraction(vazio);
+      await settle();
+      expect(novo.choices).toEqual([[{ name: "app-novo", value: "app-novo" }]]);
+      expect(igual.choices).toEqual([[{ name: `${ROOT}/gestai`, value: `${ROOT}/gestai` }]]);
+      expect(vazio.choices[0]?.map((c) => c.value)).toEqual([ROOT, `${ROOT}/gestai`]);
+    });
+
+    it("até 25 opções, valores ≤ 100 caracteres (eco longo demais não entra)", async () => {
+      const many = Array.from({ length: 40 }, (_, k) => `${ROOT}/p${k}`);
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [...many, `${ROOT}/${"x".repeat(120)}`]));
+      const a = autocomplete("p");
+      await slash.onInteraction(a);
+      const longo = autocomplete("y".repeat(101));
+      await slash.onInteraction(longo);
+      await settle();
+      expect(a.choices[0]).toHaveLength(25);
+      expect(a.choices[0]?.[0]).toEqual({ name: "p", value: "p" });
+      expect(a.choices[0]?.every((c) => c.value.length <= 100)).toBe(true);
+      expect(longo.choices).toEqual([[]]);
+    });
+
+    it("eco diferencia maiúsculas no Linux e não no Windows", async () => {
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
+      const linux = autocomplete("Gestai");
+      await slash.onInteraction(linux);
+      await settle();
+      expect(linux.choices[0]?.[0]).toEqual({ name: "Gestai", value: "Gestai" });
+      const W = "C:\\Users\\Leo\\Dev";
+      await use(ev("agent.hello", { version: "0.2.0", os: "win32", osUser: "leo", claudeAccount: ACCOUNT, projects: [], devRoots: [W] }),
+        projectsEv([W], [`${W}\\Gestai`]));
+      const win = autocomplete(`${W.toLowerCase()}\\gestai`);
+      await slash.onInteraction(win);
+      await settle();
+      expect(win.choices).toEqual([[{ name: `${W}\\Gestai`, value: `${W}\\Gestai` }]]);
+    });
+
+    it("sugestão absoluta com mais de 100 caracteres vira relativa à primeira raiz; fora dela, some", async () => {
+      const deep = `${ROOT}/${"a".repeat(45)}/${"b".repeat(45)}`; // 110 absoluto, 91 relativo
+      const outsideLong = `/srv/${"c".repeat(120)}`;
+      await use(helloDev([outsideLong], [ROOT]), projectsEv([ROOT], [deep]));
+      const a = autocomplete("bbbb");
+      await slash.onInteraction(a);
+      await settle();
+      const rel = `${"a".repeat(45)}/${"b".repeat(45)}`;
+      expect(a.choices).toEqual([[{ name: "bbbb", value: "bbbb" }, { name: rel, value: rel }]]);
+      const c = autocomplete("cccc");
+      await slash.onInteraction(c);
+      await settle();
+      expect(c.choices[0]?.map((x) => x.value)).toEqual(["cccc"]); // só o eco; a sugestão longa fora da raiz some
+    });
+
+    it("agente novo sem raiz: não ecoa relativo (o agente recusaria), mas ecoa absoluto", async () => {
+      await use(helloDev(["/opt/legado"], []));
+      const rel = autocomplete("app-novo");
+      await slash.onInteraction(rel);
+      const abs = autocomplete("/opt/outro");
+      await slash.onInteraction(abs);
+      await settle();
+      expect(rel.choices).toEqual([[]]);
+      expect(abs.choices[0]?.[0]).toEqual({ name: "/opt/outro", value: "/opt/outro" });
+    });
+
+    it("agente antigo não ecoa o texto digitado (só aceita os projetos do hello)", async () => {
+      const a = autocomplete("app-novo");
+      await slash.onInteraction(a);
+      await settle();
+      expect(a.choices).toEqual([[]]);
+    });
+
+    it("hello de agente antigo depois de um novo apaga raízes e descobertos", async () => {
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
+      await use(hello());
+      expect(router.devRootsOf(M)).toBeUndefined();
+      expect(router.discoveredOf(M)).toEqual([]);
+    });
   });
 });
 

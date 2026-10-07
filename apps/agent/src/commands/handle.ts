@@ -5,6 +5,7 @@ import { InboxFormatError, type InboxTarget } from "../claude/inject.js";
 import { BUSY_TEXT, SLASH_WHILE_BUSY } from "../claude/slash-rules.js";
 import type { SessionRegistry } from "../claude/registry.js";
 import type { SpawnInput } from "../claude/spawn.js";
+import type { ResolvedWorkspace } from "../projects/workspace.js";
 
 /** Respostas guardadas por `commandId` (inclui comandos ainda em andamento). */
 const CACHE_SIZE = 500;
@@ -36,6 +37,13 @@ export interface CommandDeps {
   machine: string;
   inventory: { find(sessionId: string): SessionInfo | undefined };
   inject: (target: InboxTarget, text: string, from: { name: string }) => Promise<void>;
+  /**
+   * Resolve e confere a pasta do `session.create` (o real é `resolveWorkspace` com as raízes dev e os projetos da
+   * config). É a fronteira de confiança: o relay só confere o formato.
+   */
+  workspace: (cwd: string, create: boolean) => Promise<ResolvedWorkspace>;
+  /** Confere de novo a contenção logo antes de cada `--bg` (o real é `recheckInside`). */
+  recheck: (ws: ResolvedWorkspace) => Promise<void>;
   spawn: (input: SpawnInput) => Promise<{ sessionId: string; bgId: string }>;
   stop: (bgId: string) => Promise<void>;
   readRegistry: (pid: number) => SessionRegistry | undefined;
@@ -127,8 +135,13 @@ export function createCommandHandler(deps: CommandDeps): CommandHandler {
           return ack(cmd.commandId);
         }
         case "session.create": {
-          const r = await deps.spawn({ cwd: cmd.cwd, name: cmd.name, prompt: cmd.prompt, permissionMode: cmd.permissionMode });
-          return ack(cmd.commandId, { sessionId: r.sessionId, bgId: r.bgId });
+          const ws = await deps.workspace(cmd.cwd, cmd.create === true);
+          const r = await deps.spawn({
+            cwd: ws.cwd, name: cmd.name, prompt: cmd.prompt, permissionMode: cmd.permissionMode,
+            // Só pasta dentro de raiz dev pode ganhar confiança automática do Claude Code (e só ela tem raiz a reconferir).
+            ...(ws.root !== undefined ? { trustPaths: ws.trustPaths, guard: () => deps.recheck(ws) } : {}),
+          });
+          return ack(cmd.commandId, { sessionId: r.sessionId, bgId: r.bgId, cwd: ws.cwd });
         }
         case "session.stop": {
           const s = findSession(cmd.sessionId);

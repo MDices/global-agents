@@ -47,7 +47,7 @@ describe.skipIf(!E2E)("e2e Linux: agente + claude --bg + relay falso", () => {
     const cwd = new URL("../../../", import.meta.url).pathname;
     const withHooks = hooksInstalled();
     const agent = createAgent({
-      relayUrl: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, token: "e2e", projects: [cwd],
+      relayUrl: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, token: "e2e", projects: [cwd], devRoots: [],
       // com os hooks da máquina instalados eles postam na porta padrão
       port: withHooks ? 48476 : 0, claudeBin: "claude", dataDir,
     });

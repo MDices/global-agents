@@ -6,14 +6,17 @@ import { injectPrompt } from "./claude/inject.js";
 import { Inventory, type RunFn } from "./claude/inventory.js";
 import { readRegistry } from "./claude/registry.js";
 import { spawnSession, type SpawnRun } from "./claude/spawn.js";
+import { grantTrust } from "./claude/trust.js";
 import { resumeViaPty } from "./claude/fallback-pty.js";
 import { runSlash } from "./claude/slash.js";
 import { stopSession } from "./claude/stop.js";
 import { createCommandHandler, type CommandDeps } from "./commands/handle.js";
-import type { AgentConfig } from "./config.js";
+import { normalizeDir, type AgentConfig } from "./config.js";
 import { startHookServer, type HookServer } from "./hooks/server.js";
 import { machineId } from "./machine.js";
 import { PendingPermissions } from "./permissions/pending.js";
+import { discoverProjects } from "./projects/discover.js";
+import { recheckInside, resolveWorkspace } from "./projects/workspace.js";
 import { TeamTracker } from "./team/tracker.js";
 import { RelayClient, type RelayClientEvents, type RelayClientOptions } from "./transport/client.js";
 import { Outbox } from "./transport/outbox.js";
@@ -54,6 +57,10 @@ export interface AgentDeps {
   commands: Partial<Omit<CommandDeps, "machine" | "inventory">>;
   /** Pasta dos `config.json` de times (padrão `~/.claude/teams`). */
   teamsDir: string;
+  /** Varre as raízes dev atrás de projetos (o real é `discoverProjects`). */
+  discover: (roots: readonly string[]) => Promise<string[]>;
+  /** Intervalo da nova varredura das raízes dev (padrão 5 min). */
+  projectsScanMs: number;
 }
 
 export interface Agent {
@@ -99,19 +106,25 @@ async function claudeAccount(run: RunFn): Promise<string | undefined> {
 
 export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Agent {
   const machine = machineId(cfg);
+  // Config editada à mão pode ter `~/dev` ou `C:/dev`: tudo daqui em diante usa o caminho absoluto nativo.
+  const devRoots = [...new Set(cfg.devRoots.map((r) => normalizeDir(r)))];
   const run: SpawnRun =
     deps.run ?? ((args, opts) => runClaude(args, { timeoutMs: 15000, ...opts, claudeBin: cfg.claudeBin }));
   const inventory: InventoryLike = deps.inventory ?? new Inventory({ claudeBin: cfg.claudeBin });
   const makeClient = deps.client ?? ((opts: RelayClientOptions) => new RelayClient(opts));
   const hookServerFactory = deps.hookServer ?? startHookServer;
   const accountCheckMs = deps.accountCheckMs ?? 60_000;
+  const discover = deps.discover ?? ((roots: readonly string[]) => discoverProjects(roots));
+  const projectsScanMs = deps.projectsScanMs ?? 300_000;
   let client: RelayClientLike | undefined;
   const permissions = new PendingPermissions({ machine, inventory, emit: (ev) => client?.send(ev) });
   const handleCommand = createCommandHandler({
     machine,
     inventory,
     inject: injectPrompt,
-    spawn: (input) => spawnSession(input, { run, inventory }),
+    workspace: (cwd, create) => resolveWorkspace(cwd, create, { devRoots, projects: cfg.projects }),
+    recheck: (ws) => recheckInside(ws),
+    spawn: (input) => spawnSession(input, { run, inventory, trust: (paths) => grantTrust(paths) }),
     stop: (bgId) => stopSession(bgId, { run }),
     readRegistry: (pid) => readRegistry(pid),
     slash: (input) => runSlash({ ...input, claudeBin: cfg.claudeBin }),
@@ -128,6 +141,9 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
   let hookServer: HookServer | undefined;
   let team: TeamTracker | undefined;
   let accountTimer: NodeJS.Timeout | undefined;
+  let scanTimer: NodeJS.Timeout | undefined;
+  /** Projetos descobertos na última varredura das raízes dev. */
+  let discovered: string[] = [];
   let lastInventoryError = "";
 
   const hello = (): AgentEvent => ({
@@ -139,7 +155,27 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     ...(cVersion !== undefined ? { claudeVersion: cVersion } : {}),
     ...(account !== undefined ? { claudeAccount: account } : {}),
     projects: cfg.projects,
+    devRoots,
   });
+
+  const projectsEvent = (): AgentEvent => ({ ...newEnvelope(machine), type: "agent.projects", devRoots, projects: discovered });
+
+  /** Varre as raízes; devolve `true` se a lista mudou. Falha vira log e mantém a lista anterior. */
+  const scanProjects = async (): Promise<boolean> => {
+    if (devRoots.length === 0) return false;
+    try {
+      const next = await discover(devRoots);
+      if (next.length === discovered.length && next.every((p, i) => p === discovered[i])) return false;
+      discovered = next;
+      return true;
+    } catch (e) {
+      console.warn(`global-agents: falha ao varrer as pastas dev: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  };
+  const rescan = async (): Promise<void> => {
+    if ((await scanProjects()) && client !== undefined) client.send(projectsEvent());
+  };
 
   const lookupName = (sessionId: string): string | undefined => {
     const name = inventory.find(sessionId)?.name;
@@ -169,7 +205,7 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
 
   return {
     async start(): Promise<void> {
-      [cVersion, account] = await Promise.all([claudeVersion(run), claudeAccount(run)]);
+      [cVersion, account] = await Promise.all([claudeVersion(run), claudeAccount(run), scanProjects()]);
 
       const isKnownSession = (id: string): boolean => inventory.find(id) !== undefined;
       const tracker = new TeamTracker({
@@ -194,6 +230,8 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       });
       client = c;
       c.on("command", onCommand);
+      // O relay guarda os projetos só em memória: a cada (re)conexão, depois do hello, manda a lista atual.
+      c.on("connected", () => { client?.send(projectsEvent()); });
       c.on("warning", (msg) => { console.warn(`global-agents: ${msg}`); });
 
       try {
@@ -218,11 +256,17 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
       inventory.start();
 
       accountTimer = setInterval(() => { void recheckAccount(); }, accountCheckMs);
+      if (devRoots.length > 0) {
+        scanTimer = setInterval(() => { void rescan(); }, projectsScanMs);
+        scanTimer.unref();
+      }
     },
 
     async stop(): Promise<void> {
       if (accountTimer !== undefined) clearInterval(accountTimer);
       accountTimer = undefined;
+      if (scanTimer !== undefined) clearInterval(scanTimer);
+      scanTimer = undefined;
       inventory.stop();
       inventory.off("changed", onChanged);
       // o listener de "error" fica: um poll em andamento ainda pode emitir, e "error" sem ouvinte lança

@@ -73,6 +73,75 @@ describe("spawnSession", () => {
     await expect(p).rejects.toThrow(/não é confiável.*`claude`/);
   });
 
+  describe("confiança em pasta de raiz dev", () => {
+    const NOT_TRUSTED = ok("Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.", 1);
+
+    it("recusa por confiança com trustPaths → grava a confiança e tenta uma vez mais", async () => {
+      const run = vi.fn().mockResolvedValueOnce(NOT_TRUSTED).mockResolvedValueOnce(ok(OK_OUT));
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      const r = await spawnSession({ ...input, trustPaths: ["/d/app", "/real/d/app"] }, { run, inventory, trust });
+      expect(r.bgId).toBe("85285a68");
+      expect(trust).toHaveBeenCalledWith(["/d/app", "/real/d/app"]);
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("continua sem confiança depois de gravar → WorkspaceNotTrustedError, sem terceira tentativa", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const { inventory } = fakeInventory();
+      await expect(spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust: () => Promise.resolve(true) }))
+        .rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("trust devolve false (estado ilegível) → não tenta de novo", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const { inventory } = fakeInventory();
+      await expect(spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust: () => Promise.resolve(false) }))
+        .rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("sem trustPaths (pasta fora das raízes) → nunca grava confiança", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      await expect(spawnSession(input, { run, inventory, trust })).rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(trust).not.toHaveBeenCalled();
+    });
+
+    it("trust lança (EPERM, disco) → loga e cai no WorkspaceNotTrustedError com a instrução, sem erro cru", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const log = vi.fn();
+      const { inventory } = fakeInventory();
+      const p = spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, log, trust: () => Promise.reject(new Error("EPERM: operation not permitted, rename")) });
+      await expect(p).rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("EPERM"));
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("guard roda antes de cada --bg (inclusive na nova tentativa); se rejeitar, nada é aberto", async () => {
+      const order: string[] = [];
+      const run = vi.fn(() => { order.push("bg"); return Promise.resolve(order.length < 3 ? NOT_TRUSTED : ok(OK_OUT)); });
+      const guard = vi.fn(() => { order.push("guard"); return Promise.resolve(); });
+      const { inventory } = fakeInventory();
+      await spawnSession({ ...input, trustPaths: ["/d/app"], guard }, { run, inventory, trust: () => Promise.resolve(true) });
+      expect(order).toEqual(["guard", "bg", "guard", "bg"]);
+      const run2 = vi.fn();
+      await expect(spawnSession({ ...input, guard: () => Promise.reject(new Error("a pasta mudou")) }, { run: run2, inventory }))
+        .rejects.toThrow("a pasta mudou");
+      expect(run2).not.toHaveBeenCalled();
+    });
+
+    it("pasta já confiável → não grava nada", async () => {
+      const run = vi.fn().mockResolvedValue(ok(OK_OUT));
+      const trust = vi.fn(() => Promise.resolve(true));
+      const { inventory } = fakeInventory();
+      await spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, trust });
+      expect(trust).not.toHaveBeenCalled();
+    });
+  });
+
   it("cwd inexistente falha antes de executar", async () => {
     const run = vi.fn();
     const { inventory } = fakeInventory();

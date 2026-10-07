@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import path, { dirname, join } from "node:path";
 import { z } from "zod";
 
 const DEFAULT_DIR = join(homedir(), ".global-agents");
@@ -12,6 +12,8 @@ const ConfigSchema = z.object({
   token: z.string().min(1),
   machineName: z.string().optional(),
   projects: z.array(z.string()).default([]),
+  /** Pastas raiz de desenvolvimento (absolutas): tudo dentro delas pode virar sessão pelo `/novo`. */
+  devRoots: z.array(z.string()).default([]),
   port: z.number().int().default(48476),
   claudeBin: z.string().default("claude"),
   dataDir: z.string().default(DEFAULT_DIR),
@@ -42,28 +44,72 @@ export function loadConfig(path: string = DEFAULT_CONFIG_PATH): AgentConfig {
   return parseConfig(raw);
 }
 
+export interface NormalizeOptions {
+  /** `path.win32` ou `path.posix` (padrão: o da plataforma). */
+  path?: typeof path.posix;
+  home?: string;
+  /** Base para caminho relativo (padrão: a pasta atual). */
+  cwd?: string;
+}
+
+/**
+ * Caminho de pasta digitado pelo usuário → absoluto no formato nativo: expande `~` (sozinho, `~/…` ou `~\…`) para o
+ * home, resolve relativo contra `cwd` e, no Windows, aceita `/` e grava com `\` e a letra do drive maiúscula
+ * (`c:/Dev` → `C:\Dev`).
+ */
+export function normalizeDir(raw: string, opts: NormalizeOptions = {}): string {
+  const p = opts.path ?? path;
+  const home = opts.home ?? homedir();
+  const cwd = opts.cwd ?? process.cwd();
+  const t = raw.trim();
+  const expanded = t === "~" ? home : /^~[\\/]/.test(t) ? p.join(home, t.slice(2)) : t;
+  const abs = p.resolve(cwd, expanded);
+  return p === path.win32 ? abs.replace(/^[a-z]:/, (d) => d.toUpperCase()) : abs;
+}
+
+export const INSTALL_REQUIRES_TEXT = "install exige --relay e --token (ou a variável GLOBAL_AGENTS_TOKEN)";
+
+/** Erro de uso do `install` (a CLI mostra o uso junto). */
+export class InstallUsageError extends Error {}
+
 export interface InstallInput {
-  relayUrl: string;
-  token: string;
+  /** Ausente reaproveita o da config anterior (obrigatório sem config). */
+  relayUrl?: string;
+  /** Ausente reaproveita o da config anterior (obrigatório sem config). */
+  token?: string;
   fingerprint?: string;
   /** Vazio mantém os projetos da config anterior. */
   projects: string[];
+  /** Vazio mantém as raízes dev da config anterior. */
+  devRoots?: string[];
+  /** `--no-dev-root`: zera a lista de raízes dev (não combina com `devRoots`). */
+  clearDevRoots?: boolean;
 }
 
-/** Config do `install`: mescla com a anterior; relay novo sem `--fingerprint` descarta o pin antigo. */
+/**
+ * Config do `install`: mescla com a anterior. Com config anterior, `--relay`, token e `--fingerprint` são opcionais
+ * (usa os salvos); sem ela, relay e token são obrigatórios. Relay novo sem `--fingerprint` descarta o pin antigo.
+ */
 export function installConfig(previous: AgentConfig | undefined, input: InstallInput): { cfg: AgentConfig; warnings: string[] } {
+  const relayUrl = input.relayUrl ?? previous?.relayUrl;
+  const token = input.token ?? previous?.token;
+  if (relayUrl === undefined || token === undefined) throw new InstallUsageError(INSTALL_REQUIRES_TEXT);
   const warnings: string[] = [];
   const base: Partial<AgentConfig> = { ...previous };
-  if (input.fingerprint === undefined && previous !== undefined && previous.relayUrl !== input.relayUrl && previous.relayCertFingerprint !== undefined) {
+  if (input.fingerprint === undefined && previous !== undefined && previous.relayUrl !== relayUrl && previous.relayCertFingerprint !== undefined) {
     delete base.relayCertFingerprint;
     warnings.push("relay mudou; o fingerprint anterior foi descartado — passe --fingerprint para fixar o certificado novo");
   }
+  const devRoots = [...new Set((input.devRoots ?? []).map((r) => normalizeDir(r)))];
+  if (input.clearDevRoots === true && devRoots.length > 0) throw new InstallUsageError("--no-dev-root não combina com --dev-root");
   const cfg = parseConfig({
     ...base,
-    relayUrl: input.relayUrl,
-    token: input.token,
+    relayUrl,
+    token,
     ...(input.fingerprint !== undefined ? { relayCertFingerprint: input.fingerprint } : {}),
     ...(input.projects.length > 0 ? { projects: input.projects } : {}),
+    ...(devRoots.length > 0 ? { devRoots } : {}),
+    ...(input.clearDevRoots === true ? { devRoots: [] } : {}),
   });
   return { cfg, warnings };
 }

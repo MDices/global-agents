@@ -19,14 +19,28 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
    ```
 2. Rode o instalador (PowerShell normal, **não** precisa de administrador):
    ```powershell
-   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint "<fp>" -Project C:\dev\meu-projeto
+   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint "<fp>" -DevRoot C:\dev
    ```
+   `-DevRoot` (uma ou mais pastas, separadas por vírgula: `-DevRoot C:\dev,D:\trabalho`) define as **pastas raiz de desenvolvimento**: tudo dentro delas pode virar sessão pelo `/novo`, inclusive uma pasta nova com `criar:true`, sem cadastrar projeto nenhum. Aceita `C:\dev`, `C:/dev` ou `c:\Dev` (e `~\dev` para o seu perfil); a config grava o caminho absoluto no formato do Windows. `-Project C:\dev\meu-projeto` continua aceito, opcional, para projetos avulsos fora das pastas dev.
    Se a política de execução bloquear: `powershell -ExecutionPolicy Bypass -File .\deploy\agent\install-windows.ps1 ...`.
    Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` a partir de um XML (`schtasks /Create /TN global-agents /XML ... /F`; gatilho no logon do seu usuário, token interativo, nível limitado, sem limite de tempo, reinício em falha, sem condição de bateria), inicia o agente e roda o `doctor`.
    O token é pedido de forma oculta (não vai para o histórico do PowerShell); também pode vir da variável `GLOBAL_AGENTS_TOKEN`.
 3. Para ver o XML da tarefa sem registrar nada, rode `node apps\agent\dist\cli.js install --relay ... --service` (sem `--apply`) com `GLOBAL_AGENTS_TOKEN` definido. Não cole o XML/comando impresso no cmd: use sempre `--apply`, que executa o `schtasks` sem passar por shell.
 
 Não é preciso administrador: a tarefa é do seu usuário e roda com privilégio limitado. O agente roda **sem janela de console**; não há o que fechar por engano.
+
+## Pastas dev e `/novo`
+
+No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e repositórios git das pastas dev), um caminho relativo à primeira pasta dev (`gestai`, `work\app-novo`) ou um caminho absoluto. O agente só abre sessão dentro de uma pasta dev (comparando o caminho real, sem diferenciar maiúsculas) ou num `-Project`; pasta inexistente só é criada com `criar:true`. Sem `projeto`, a sessão abre na própria pasta dev. Sem pasta dev, o `/novo` responde com o comando `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`. `projeto:~\dev\app` também funciona (`~` é o seu perfil). Detalhes, inclusive a confiança do Claude Code em pastas novas, em [install.md](./install.md#pastas-dev---dev-root).
+
+> **Atenção: pasta dev = "tudo aqui é confiável para o Claude Code".** Qualquer pasta dentro de uma pasta dev pode ganhar a confiança do Claude Code automaticamente quando uma sessão é aberta nela pelo Discord, inclusive um repositório de terceiros clonado ali e nunca aberto. Confiar numa pasta libera o que ela traz: hooks em `.claude/settings.json`, servidores MCP de `.mcp.json` e afins passam a rodar sem o diálogo de confiança. Não use como pasta dev um lugar onde você clona código em que não confia; clone esse código fora das pastas dev.
+
+Para atualizar o agente e acrescentar ou trocar as pastas dev, o fluxo é `git pull` seguido do próprio instalador só com `-DevRoot`. Com a config já gravada ele não pede token nem `-Relay`; refaz `pnpm install` e o build (só `-SkipBuild` pula esse passo) e reinicia o agente sozinho:
+```powershell
+git pull
+.\deploy\agent\install-windows.ps1 -DevRoot C:\dev,D:\trabalho
+```
+O mesmo vale para `-Project`. Sem o script, dá para fazer à mão: `node apps\agent\dist\cli.js install --dev-root C:\dev` e depois `schtasks /End /TN global-agents; schtasks /Run /TN global-agents`. `-DevRoot`/`--dev-root` substitui a lista inteira (repita as pastas que quer manter); não passar nenhum mantém a lista, e `--no-dev-root` (na CLI) apaga todas. `status` mostra a linha `raízes dev:`.
 
 ## Verificar
 
@@ -57,6 +71,7 @@ Marque e cole a saída/observações de volta no chat.
 - [ ] **Cartão de permissão:** uma sessão pede uma ferramenta que exige permissão; o cartão aparece no Discord; Permitir/Negar chega à sessão.
 - [ ] **Reboot:** reiniciar o PC, fazer logon; sem abrir nada, `status` mostra o agente rodando e o `/sessoes` responde no canal da máquina.
 - [ ] **Reinício em falha:** matar o `node.exe` do agente pelo Gerenciador de Tarefas e conferir se ele volta em até ~1 min. Se não voltar, anotar o resultado (a decisão sobre um laço de reinício fica para depois do teste).
+- [ ] **Pastas dev e confiança (ainda não validado num Windows real):** com `-DevRoot C:\dev`, `git clone` de um repositório qualquer em `C:\dev\teste-ga` sem abrir o `claude` nele; `/novo projeto:teste-ga` deve abrir a sessão (o agente grava a confiança e tenta de novo). Conferir em `%USERPROFILE%\.claude.json` que a chave nova é `C:/dev/teste-ga` (com `/` e drive maiúsculo) e que nenhuma chave com `\` foi criada. Também: `/novo projeto:app-novo criar:true` cria `C:\dev\app-novo`; `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev,D:\trabalho` roda sem pedir token e reinicia o agente.
 - [ ] **Remoção:** depois de `uninstall --service --apply`, conferir que não sobrou nenhum `node.exe` do agente.
 - [ ] **Azure AD:** em PC ingressado no Azure AD, conferir se `USERDOMAIN` = `AzureAD` é aceito no `UserId` da tarefa (`schtasks /Create` não deve falhar).
 - [ ] (Opcional) e2e automatizado: `$env:GLOBAL_AGENTS_E2E=1; pnpm --filter @global-agents/agent test e2e-windows` — cria uma sessão `--bg`, injeta pelo pipe e confere o transcript (responde BRAVO).

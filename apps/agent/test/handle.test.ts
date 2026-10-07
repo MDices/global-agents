@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InboxFormatError, type InboxTarget } from "../src/claude/inject.js";
 import type { SessionRegistry } from "../src/claude/registry.js";
 import type { SpawnInput } from "../src/claude/spawn.js";
+import type { ResolvedWorkspace } from "../src/projects/workspace.js";
 import { createCommandHandler, type CommandDeps, type ResumeInput, type SlashInput } from "../src/commands/handle.js";
 
 const MACHINE = "leo/fedora";
@@ -22,6 +23,8 @@ function deps(over: Partial<CommandDeps> = {}) {
     machine: MACHINE,
     inventory: { find: (id: string) => sessions.find((s) => s.sessionId === id) },
     inject: vi.fn<(t: InboxTarget, text: string, from: { name: string }) => Promise<void>>(() => Promise.resolve()),
+    workspace: vi.fn<(cwd: string, create: boolean) => Promise<ResolvedWorkspace>>((cwd) => Promise.resolve({ cwd, trustPaths: [], created: false })),
+    recheck: vi.fn<(ws: ResolvedWorkspace) => Promise<void>>(() => Promise.resolve()),
     spawn: vi.fn<(i: SpawnInput) => Promise<{ sessionId: string; bgId: string }>>(() => Promise.resolve({ sessionId: "novo", bgId: "0badf00d" })),
     stop: vi.fn<(b: string) => Promise<void>>(() => Promise.resolve()),
     readRegistry: vi.fn((pid: number) => REG[pid]),
@@ -248,9 +251,39 @@ describe("createCommandHandler", () => {
     const d = deps();
     const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c1", cwd: "/p", name: "n", prompt: "p", permissionMode: "plan" };
     const ev = await createCommandHandler(d)(cmd);
-    expect(ev).toMatchObject({ type: "command.ack", commandId: "c1", result: { sessionId: "novo", bgId: "0badf00d" } });
+    expect(ev).toMatchObject({ type: "command.ack", commandId: "c1", result: { sessionId: "novo", bgId: "0badf00d", cwd: "/p" } });
     expectValid(ev);
+    expect(d.workspace).toHaveBeenCalledWith("/p", false);
     expect(d.spawn).toHaveBeenCalledWith({ cwd: "/p", name: "n", prompt: "p", permissionMode: "plan" });
+  });
+
+  it("session.create relativo com create → pasta resolvida pelo agente, confiança só dentro da raiz, ack com o cwd real", async () => {
+    const d = deps({
+      workspace: vi.fn(() => Promise.resolve({ cwd: "/home/leo/dev/work/app-novo", root: "/home/leo/dev", trustPaths: ["/home/leo/dev/work/app-novo"], created: true })),
+    });
+    const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c2", cwd: "work/app-novo", name: "n", prompt: "p", permissionMode: "plan", create: true };
+    const ev = await createCommandHandler(d)(cmd);
+    expect(d.workspace).toHaveBeenCalledWith("work/app-novo", true);
+    expect(d.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/home/leo/dev/work/app-novo", name: "n", prompt: "p", permissionMode: "plan", trustPaths: ["/home/leo/dev/work/app-novo"] }));
+    expect(ev).toMatchObject({ type: "command.ack", result: { cwd: "/home/leo/dev/work/app-novo" } });
+    // o guard do spawn é a recheca da contenção com o workspace resolvido
+    const input = d.spawn.mock.calls[0]?.[0];
+    await input?.guard?.();
+    expect(d.recheck).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/home/leo/dev/work/app-novo", root: "/home/leo/dev" }));
+  });
+
+  it("projeto explícito fora da raiz: spawn sem trustPaths e sem guard (nunca ganha confiança automática)", async () => {
+    const d = deps({ workspace: vi.fn(() => Promise.resolve({ cwd: "/opt/legado", trustPaths: ["/opt/legado"], created: false })) });
+    const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c4", cwd: "/opt/legado", name: "n", prompt: "p", permissionMode: "plan" };
+    await createCommandHandler(d)(cmd);
+    expect(d.spawn).toHaveBeenCalledWith({ cwd: "/opt/legado", name: "n", prompt: "p", permissionMode: "plan" });
+  });
+
+  it("session.create negado pela contenção → command.error e spawn nunca chamado", async () => {
+    const d = deps({ workspace: vi.fn(() => Promise.reject(new Error("a pasta /etc está fora das pastas dev desta máquina (/home/leo/dev) e não é um projeto configurado"))) });
+    const cmd: RelayCommand = { ...env(), type: "session.create", commandId: "c3", cwd: "/etc", name: "n", prompt: "p", permissionMode: "plan" };
+    expect(await createCommandHandler(d)(cmd)).toMatchObject({ type: "command.error", reason: expect.stringContaining("fora das pastas dev") as unknown });
+    expect(d.spawn).not.toHaveBeenCalled();
   });
 
   it("session.create com spawn falhando → command.error com a mensagem", async () => {

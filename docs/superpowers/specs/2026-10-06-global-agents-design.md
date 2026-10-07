@@ -57,7 +57,8 @@ na mesma conta do SO não exige nada: hooks, settings, sockets e inventário sã
 
 | `type` | Campos | Origem |
 |---|---|---|
-| `agent.hello` | `version`, `os`, `osUser`, `claudeVersion`, `claudeAccount` (e-mail de `claude auth status`), `projects[]` (cwds sugeridos para `/novo`) | conexão; reenviado quando a conta logada muda |
+| `agent.hello` | `version`, `os`, `osUser`, `claudeVersion`, `claudeAccount` (e-mail de `claude auth status`), `projects[]` (projetos explícitos da config), `devRoots[]?` (pastas raiz de desenvolvimento; ausente = agente anterior às pastas dev, e o relay mantém a validação antiga do `/novo`) | conexão; reenviado quando a conta logada muda |
+| `agent.projects` | `devRoots[]`, `projects[]` (descobertos nas pastas dev: subpastas de 1º nível e repositórios git do 2º, absolutos, até 200) | a cada conexão, depois do `hello`; e quando a varredura (a cada 5 min) muda a lista |
 | `session.list` | `sessions[]` com `sessionId`, `name`, `cwd`, `kind`, `status`, `state?`, `waitingFor?`, `bgId?` | `claude agents --json`, na conexão e a cada mudança (poll 5 s com diff) |
 | `session.status` | `sessionId`, `name`, `cwd`, `state` ∈ `working\|waiting\|done\|error`, `snippet?` | hooks `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd` |
 | `turn.prompt` | `sessionId`, `text`, `source` ∈ `terminal\|remote` | hook `UserPromptSubmit` (`source=remote` quando o texto começa com a tag de cross-session) |
@@ -70,7 +71,7 @@ na mesma conta do SO não exige nada: hooks, settings, sockets e inventário sã
 
 | `type` | Campos | Ação no agente |
 |---|---|---|
-| `session.create` | `commandId`, `cwd`, `name`, `prompt`, `permissionMode` | `claude --bg --name <name> --permission-mode <mode> "<prompt>"` com ambiente limpo de `CLAUDE_CODE_*`; resolve `sessionId` via `agents --json`; `ack` com `sessionId`, `bgId` |
+| `session.create` | `commandId`, `cwd` (absoluto ou relativo à primeira pasta dev), `name`, `prompt`, `permissionMode`, `create?` | resolve e confere a pasta (contenção nas pastas dev, ver 6.2); cria a pasta só com `create`; `claude --bg --name <name> --permission-mode <mode> "<prompt>"` com ambiente limpo de `CLAUDE_CODE_*`; resolve `sessionId` via `agents --json`; `ack` com `sessionId`, `bgId`, `cwd` (absoluto) |
 | `session.send` | `commandId`, `sessionId`, `text` | injeta no inbox; `ack` quando a linha foi escrita |
 | `session.stop` | `commandId`, `sessionId` | `claude stop <bgId>` (só bg); `error` para interativa |
 | `permission.decide` | `commandId`, `requestId`, `behavior` ∈ `allow\|deny` | destrava o hook pendente |
@@ -121,8 +122,15 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 
 ### 5.5 Configuração
 
-`~/.global-agents/config.json`: `relayUrl`, `machineName`, `token`, `projects[]`, `port` (padrão 48476). CLI:
-`global-agents install | uninstall | run | status | doctor`. `doctor` roda os checks dos spikes (versão do Claude,
+`~/.global-agents/config.json`: `relayUrl`, `machineName`, `token`, `projects[]` (opcional e secundária quando há
+raiz), `devRoots[]` (pastas raiz de desenvolvimento por máquina; padrão `[]`; normalizadas ao gravar: `~` expandido,
+absolutas, no Windows `C:/dev` e `c:\Dev` viram `C:\dev`/`C:\Dev` nativos; o agente normaliza de novo ao subir, para
+config editada à mão), `port` (padrão 48476). CLI:
+`global-agents install | uninstall | run | status | doctor`. `install --dev-root <dir>` (repetível) grava as pastas dev;
+com config já gravada, `--relay`, token e `--fingerprint` são opcionais (usa os salvos), e `--project`/`--dev-root`
+substituem a lista correspondente só quando passados (`--no-dev-root` apaga as raízes). No Windows,
+`install-windows.ps1 -DevRoot <dir>` sobre uma instalação existente não pede token nem `-Relay`, refaz `pnpm install` e o
+build (só `-SkipBuild` pula) e reinicia a tarefa; o fluxo de atualização é `git pull` seguido desse comando. `doctor` roda os checks dos spikes (versão do Claude,
 `agents --json`, socket/pipe acessível, hooks presentes).
 
 ## 6. Relay + bot (`apps/relay`)
@@ -151,8 +159,44 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
   botões `Permitir` / `Negar`; clique → `permission.decide`; `permission.resolved` edita o card com o desfecho.
 - Mensagem humana numa thread mapeada → `session.send` → reação ✅ no ack, ❌ no erro, ⏳ se máquina offline
   (comando vai para `pending_commands`, validade 1 h; ao expirar, edita a reação para ❌ e avisa).
-- `/novo prompt:<texto> projeto:<cwd> modo:<default|acceptEdits|plan|bypassPermissions>` no canal → `session.create`
-  → thread criada no `ack`. `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
+- `/novo prompt:<texto> projeto:<pasta> modo:<default|acceptEdits|plan|bypassPermissions> criar:<bool>` no canal →
+  `session.create` → thread criada no `ack` (com o `cwd` absoluto devolvido pelo agente).
+  - `projeto`: uma sugestão do autocomplete (projetos explícitos + pastas dev + descobertos do `agent.projects`, filtrados
+    pelo texto, até 25; o texto digitado vai como primeira opção quando não é exatamente uma sugestão), um caminho
+    relativo à primeira pasta dev (`gestai`, `work/app-novo`) ou absoluto. O relay só confere formato (não vazio, sem
+    caractere de controle, até 1024); quem decide é o agente.
+  - Sem `projeto`: a própria primeira pasta dev (mesmo havendo projetos explícitos); senão o primeiro projeto
+    explícito; senão `noDevRootText(os)` (em `@global-agents/protocol`, o mesmo texto no relay e no agente) com o
+    comando do `os` da máquina: Linux `global-agents install --dev-root ~/dev` e
+    `systemctl --user restart global-agents`; macOS o mesmo `install` e "reinicie o agente"; Windows
+    `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev` (o script reinicia o agente sozinho).
+  - Autocomplete: no Linux o eco diferencia maiúsculas (`Gestai` ≠ `gestai`), no Windows não; sugestão absoluta com
+    mais de 100 caracteres vai como caminho relativo à primeira raiz (ou some, se estiver fora dela); agente com
+    `devRoots: []` só ecoa caminho absoluto ou com `~`.
+  - As raízes de cada máquina ficam também em `machines.dev_roots` (JSON, migração 2), para o `/novo` saber que o
+    agente é novo mesmo logo após um restart do relay; o valor vale até o próximo hello.
+  - Objetivo: informada a raiz uma vez, nenhum projeto precisa ser cadastrado; qualquer subpasta dela vale, inclusive
+    digitada à mão e mais funda que a varredura.
+  - `criar:true` vira `create: true`. No agente (fronteira de confiança): permitido se está na lista `projects` ou dentro
+    de uma pasta dev, medido pelo `realpath` do ancestral existente mais próximo contra o `realpath` da raiz (sem
+    diferenciar maiúsculas no Windows; symlink que sai da raiz é negado; a própria raiz vale). Pasta inexistente só é
+    criada com `create`, dentro de uma pasta dev, e cada segmento novo casa `^[A-Za-z0-9][A-Za-z0-9._-]*$` (no Windows
+    também sem nomes reservados como `CON`/`NUL`/`COM1` e sem ponto final). `~` digitado é o home do agente. O ancestral
+    existente precisa ser pasta. A contenção é conferida de novo imediatamente antes de cada `claude --bg`.
+  - Confiança do Claude Code: pasta nova sem git herda a confiança de um ancestral confiável; repositório git não (a
+    raiz do repositório é a fronteira). Se o `--bg` recusar ("Workspace not trusted") uma pasta dentro de pasta dev, o
+    agente grava `projects[<pasta>].hasTrustDialogAccepted: true` no `~/.claude.json` e tenta uma vez mais; fora das
+    pastas dev, devolve o erro com a instrução. Chave no formato do Claude Code (no Windows `C:/Dev/app`, com `/` e
+    drive maiúsculo; mais a forma NFC). Escrita sob a trava do Claude Code (`<arquivo>.lock`, desiste em 2 s), atômica,
+    sem perder campos, seguindo symlink do arquivo e relendo antes do `rename` (mudou no meio → refaz a mescla uma vez).
+    Falha ao gravar vira a instrução de confiança, nunca erro cru.
+  - **Decisão de segurança: pasta dev = "tudo aqui é confiável para o Claude Code".** A confiança automática vale para
+    qualquer pasta dentro da raiz, não só as criadas pelo `/novo`, inclusive repositórios de terceiros clonados ali,
+    cujos hooks (`.claude/settings.json`) e `.mcp.json` passam a rodar sem o diálogo. É a vontade explícita do
+    Leonardo ("tudo dentro dessa pasta o bot vai ter permissão") e está destacada em `install.md` e `windows.md`.
+  - Agente anterior às pastas dev (hello sem `devRoots`): o relay só aceita os `projects` do hello e recusa `criar`,
+    porque esse agente não confere a pasta.
+- `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
 - Máquina conecta pela primeira vez → cria o canal `#<machine>` na categoria configurada.
 
 ### 6.2.1 Comandos do Claude pela thread (`/claude`)
