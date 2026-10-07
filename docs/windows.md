@@ -56,7 +56,19 @@ O mesmo vale para `-Project`. Sem o script, dá para fazer à mão: `node apps\a
 schtasks /End /TN global-agents                     # para agora
 node apps\agent\dist\cli.js uninstall --service --apply   # remove os hooks e a tarefa (faz o /End antes do /Delete)
 ```
+O `/End` encerra só o `conhost` da tarefa: **o `node.exe` filho sobrevive** (confirmado no Toneli-PC). Por isso o `uninstall --service --apply` e o `install-windows.ps1` encerram também os `node.exe` cuja linha de comando tem o `dist\cli.js` desta instalação seguido de ` run`. Para conferir ou encerrar à mão:
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'dist.cli.js.{1,3}run' | Select-Object ProcessId, CreationDate
+Stop-Process -Id <ProcessId> -Force
+```
 A config em `~/.global-agents` é mantida. `crossSessionInbound` em `~/.claude/settings.json` não é removido automaticamente.
+
+## Solução de problemas
+
+- **Config nova não pega / o relay mostra o contato antigo** (versão, pastas dev, projetos): sobrou um `node.exe` antigo do agente, ainda conectado com a config velha, segurando a porta local dos hooks; o agente novo falha com `EADDRINUSE` e sai. Liste com o comando de diagnóstico acima (confira o `CreationDate`), encerre com `Stop-Process -Id <ProcessId> -Force` e rode `schtasks /Run /TN global-agents`. Rodar de novo o `install-windows.ps1` já faz isso.
+- **O agente sumiu / não sobe e não aparece erro:** a tarefa roda sem console; os erros fatais de inicialização (porta ocupada, config inválida) e a linha `agente iniciado` (versão e PID) ficam em `%USERPROFILE%\.global-agents\agent.log` (256 KB; passou disso vira `agent.log.1`). `node apps\agent\dist\cli.js status` mostra o último erro dele quando o agente não está rodando. Porta ocupada aparece como `a porta 48476 (127.0.0.1) dos hooks já está em uso…`.
+- **O `install-windows.ps1` parou com `ERRO: o(s) node(s) PID …`:** o node antigo não encerrou em 5 s (por exemplo, foi iniciado como administrador). Rode o `Stop-Process -Id <PID> -Force` indicado num PowerShell elevado e execute o script de novo.
+- O `Stop-Process` do comando de porta ocupada encerra o node de **qualquer** instalação do global-agents nesta máquina, não só desta.
 
 ## Checklist de validação manual (Toneli-PC)
 
@@ -72,7 +84,8 @@ Marque e cole a saída/observações de volta no chat.
 - [ ] **Reboot:** reiniciar o PC, fazer logon; sem abrir nada, `status` mostra o agente rodando e o `/sessoes` responde no canal da máquina.
 - [ ] **Reinício em falha:** matar o `node.exe` do agente pelo Gerenciador de Tarefas e conferir se ele volta em até ~1 min. Se não voltar, anotar o resultado (a decisão sobre um laço de reinício fica para depois do teste).
 - [ ] **Pastas dev e confiança (ainda não validado num Windows real):** com `-DevRoot C:\dev`, `git clone` de um repositório qualquer em `C:\dev\teste-ga` sem abrir o `claude` nele; `/novo projeto:teste-ga` deve abrir a sessão (o agente grava a confiança e tenta de novo). Conferir em `%USERPROFILE%\.claude.json` que a chave nova é `C:/dev/teste-ga` (com `/` e drive maiúsculo) e que nenhuma chave com `\` foi criada. Também: `/novo projeto:app-novo criar:true` cria `C:\dev\app-novo`; `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev,D:\trabalho` roda sem pedir token e reinicia o agente.
-- [ ] **Remoção:** depois de `uninstall --service --apply`, conferir que não sobrou nenhum `node.exe` do agente.
+- [ ] **Remoção:** depois de `uninstall --service --apply`, conferir que não sobrou nenhum `node.exe` do agente (o comando de diagnóstico não deve listar nada).
+- [x] **`/End` derruba o node filho?** Não: o `node.exe` sobrevive e segura a porta dos hooks (confirmado no Toneli-PC). Corrigido encerrando os nodes órfãos no `install-windows.ps1` e no `uninstall --service --apply`.
 - [ ] **Azure AD:** em PC ingressado no Azure AD, conferir se `USERDOMAIN` = `AzureAD` é aceito no `UserId` da tarefa (`schtasks /Create` não deve falhar).
 - [ ] (Opcional) e2e automatizado: `$env:GLOBAL_AGENTS_E2E=1; pnpm --filter @global-agents/agent test e2e-windows` — cria uma sessão `--bg`, injeta pelo pipe e confere o transcript (responde BRAVO).
 

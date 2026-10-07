@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@global-agents/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startHookServer, type HookDecision, type PermissionPayload } from "../src/hooks/server.js";
+import { portInUseMessage, startHookServer, type HookDecision, type PermissionPayload } from "../src/hooks/server.js";
 
 const lookupName = (): string | undefined => undefined;
 const prompt = { session_id: "s1", transcript_path: "/t", cwd: "/home/x/proj", hook_event_name: "UserPromptSubmit", permission_mode: "default", prompt: "oi" };
@@ -117,5 +117,24 @@ describe("startHookServer", () => {
     await srv.close();
     close = undefined;
     expect((await pending).status).toBe(204);
+  });
+});
+
+describe("porta dos hooks ocupada", () => {
+  it("EADDRINUSE vira erro em português com a porta e como resolver", async () => {
+    const { srv } = await start();
+    const err = await startHookServer({ port: srv.port, machine: "m", lookupName, onEvents: () => undefined }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain(`porta ${srv.port}`);
+    expect(err?.message).toContain("já existe outro agente");
+    expect((err?.cause as NodeJS.ErrnoException).code).toBe("EADDRINUSE");
+  });
+
+  it("a instrução muda por plataforma", () => {
+    expect(portInUseMessage(48476, "win32")).toContain("Get-CimInstance Win32_Process");
+    expect(portInUseMessage(48476, "linux")).toContain("systemctl --user restart global-agents");
   });
 });
