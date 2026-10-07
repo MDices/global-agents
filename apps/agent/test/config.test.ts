@@ -97,6 +97,12 @@ describe("installConfig", () => {
     expect(installConfig(prev, { projects: [], devRoots: ["/d3"] }).cfg).toMatchObject({ projects: ["/x"], devRoots: ["/d3"] });
   });
 
+  it("--no-dev-root zera as raízes e mantém o resto; junto com --dev-root é erro de uso", () => {
+    const prev = loadConfig(tmpConfig({ relayUrl: "ws://h:1/ws", token: "t", projects: ["/x"], devRoots: ["/d1"] }));
+    expect(installConfig(prev, { projects: [], clearDevRoots: true }).cfg).toMatchObject({ projects: ["/x"], devRoots: [] });
+    expect(() => installConfig(prev, { projects: [], devRoots: ["/d2"], clearDevRoots: true })).toThrow(InstallUsageError);
+  });
+
   it("token novo com config anterior substitui o salvo; --relay novo sem fingerprint ainda descarta o pin", () => {
     const prev = loadConfig(tmpConfig({ relayUrl: "wss://1.2.3.4:8443/ws", relayCertFingerprint: FP, token: "velho" }));
     expect(installConfig(prev, { token: "novo", projects: [] }).cfg).toMatchObject({ token: "novo", relayCertFingerprint: FP });

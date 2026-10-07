@@ -82,6 +82,8 @@ export interface InstallInput {
   projects: string[];
   /** Vazio mantém as raízes dev da config anterior. */
   devRoots?: string[];
+  /** `--no-dev-root`: zera a lista de raízes dev (não combina com `devRoots`). */
+  clearDevRoots?: boolean;
 }
 
 /**
@@ -99,6 +101,7 @@ export function installConfig(previous: AgentConfig | undefined, input: InstallI
     warnings.push("relay mudou; o fingerprint anterior foi descartado — passe --fingerprint para fixar o certificado novo");
   }
   const devRoots = [...new Set((input.devRoots ?? []).map((r) => normalizeDir(r)))];
+  if (input.clearDevRoots === true && devRoots.length > 0) throw new InstallUsageError("--no-dev-root não combina com --dev-root");
   const cfg = parseConfig({
     ...base,
     relayUrl,
@@ -106,6 +109,7 @@ export function installConfig(previous: AgentConfig | undefined, input: InstallI
     ...(input.fingerprint !== undefined ? { relayCertFingerprint: input.fingerprint } : {}),
     ...(input.projects.length > 0 ? { projects: input.projects } : {}),
     ...(devRoots.length > 0 ? { devRoots } : {}),
+    ...(input.clearDevRoots === true ? { devRoots: [] } : {}),
   });
   return { cfg, warnings };
 }

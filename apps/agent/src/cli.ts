@@ -16,14 +16,15 @@ import { runWindowsService, serviceBackend, windowsUserId, type WindowsServiceRu
 const USAGE = `uso: global-agents <comando> [opções]
 
 comandos:
-  install --relay <url> [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--dev-root <dir>]... [--service]
+  install [--relay <url>] [--token <token>] [--fingerprint <fp>] [--project <dir>]... [--dev-root <dir>]... [--no-dev-root] [--service]
             grava a config, copia os scripts de hook e instala os hooks do Claude Code;
             --dev-root (repetível) define as pastas raiz de desenvolvimento: tudo dentro delas
             pode virar sessão pelo /novo do Discord, inclusive pasta nova (criar:true), sem
             cadastrar projeto nenhum; aceita ~/dev, caminho relativo e, no Windows, C:/dev;
             com config já gravada, --relay, --token e --fingerprint são opcionais (usa os salvos),
-            então "install --dev-root <dir>" só troca as raízes; --project e --dev-root
-            substituem a lista correspondente, e quem não for passado mantém a anterior;
+            então "install --dev-root <dir>" só troca as raízes (sem config, --relay e token são
+            obrigatórios); --project e --dev-root substituem a lista correspondente, e quem não
+            for passado mantém a anterior; --no-dev-root apaga todas as raízes dev;
             --service também grava a unidade systemd --user (Linux) ou mostra o comando do
             Agendador de Tarefas ao logon (Windows; com --apply o schtasks é executado)
   uninstall [--service] [--apply]
@@ -42,6 +43,7 @@ interface Args {
   flags: Map<string, string[]>;
   service: boolean;
   apply: boolean;
+  noDevRoot: boolean;
 }
 
 const KNOWN = new Set(["--relay", "--token", "--fingerprint", "--project", "--dev-root", "--config"]);
@@ -50,17 +52,19 @@ function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string[]>();
   let service = false;
   let apply = false;
+  let noDevRoot = false;
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i] ?? "";
     if (k === "--service") { service = true; continue; }
     if (k === "--apply") { apply = true; continue; }
+    if (k === "--no-dev-root") { noDevRoot = true; continue; }
     if (!KNOWN.has(k)) throw new UsageError(`opção desconhecida: ${k}`);
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new UsageError(`a opção ${k} precisa de um valor`);
     flags.set(k, [...(flags.get(k) ?? []), v]);
     i++;
   }
-  return { flags, service, apply };
+  return { flags, service, apply, noDevRoot };
 }
 
 function one(a: Args, k: string): string | undefined {
@@ -163,7 +167,7 @@ async function install(a: Args): Promise<void> {
   let result: ReturnType<typeof installConfig>;
   try {
     result = installConfig(previous, {
-      projects, devRoots,
+      projects, devRoots, ...(a.noDevRoot ? { clearDevRoots: true } : {}),
       ...(relayUrl !== undefined ? { relayUrl } : {}),
       ...(token !== undefined ? { token } : {}),
       ...(fingerprint !== undefined ? { fingerprint } : {}),
@@ -261,6 +265,7 @@ async function main(argv: string[]): Promise<number> {
   const a = parseArgs(rest);
   if (a.service && cmd !== "install" && cmd !== "uninstall") throw new UsageError("--service só vale para install e uninstall");
   if (a.apply && !a.service) throw new UsageError("--apply só vale junto com --service");
+  if (a.noDevRoot && cmd !== "install") throw new UsageError("--no-dev-root só vale para install");
   switch (cmd) {
     case "install":
       await install(a);
