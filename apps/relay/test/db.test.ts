@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { MachineExistsError, hashToken, openDb } from "../src/db.js";
+import { DatabaseSync } from "node:sqlite";
+import { MIGRATIONS, MachineExistsError, hashToken, openDb } from "../src/db.js";
 
 describe("hashToken", () => {
   it("é sha256 hex determinístico", () => {
@@ -16,6 +17,32 @@ describe("migrate", () => {
     const db = openDb(":memory:");
     expect(() => db.migrate()).not.toThrow();
     expect(() => db.migrate()).not.toThrow();
+  });
+});
+
+describe("migração 2 (dev_roots)", () => {
+  it("sobre um banco da versão 1: acrescenta a coluna, mantém as linhas e começa sem raízes (modo antigo)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "relay-mig-"));
+    const file = join(dir, "relay.db");
+    const v1 = new DatabaseSync(file);
+    v1.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
+    v1.exec(MIGRATIONS[0] ?? "");
+    v1.exec("INSERT INTO schema_version (version) VALUES (1)");
+    v1.exec("INSERT INTO machines (name, token_hash, os, channel_id) VALUES ('fedora/leonardo', 'h', 'linux', 'ch-1')");
+    v1.close();
+    const db = openDb(file);
+    const m = db.machines.getByName("fedora/leonardo");
+    expect(m).toMatchObject({ tokenHash: "h", os: "linux", channelId: "ch-1", devRoots: null });
+    db.machines.setDevRoots("fedora/leonardo", ["/home/leonardo/dev"]);
+    db.close();
+    const again = openDb(file);
+    expect(again.machines.getByName("fedora/leonardo")?.devRoots).toEqual(["/home/leonardo/dev"]);
+    again.machines.setDevRoots("fedora/leonardo", null);
+    expect(again.machines.getByName("fedora/leonardo")?.devRoots).toBeNull();
+    again.machines.setDevRoots("fedora/leonardo", []);
+    expect(again.machines.getByName("fedora/leonardo")?.devRoots).toEqual([]);
+    again.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

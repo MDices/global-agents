@@ -81,6 +81,16 @@ describe("agent.hello", () => {
     expect(router.discoveredOf(M)).toEqual([]);
   });
 
+  it("raízes persistidas: um relay novo (restart) sobre o mesmo banco já sabe que o agente é novo", async () => {
+    emit(ev("agent.hello", { version: "0.2.0", os: "linux", osUser: "leonardo", projects: [], devRoots: ["/home/leonardo/dev"] }));
+    await settle();
+    expect(db.machines.getByName(M)?.devRoots).toEqual(["/home/leonardo/dev"]);
+    const restarted = createRouter({ db, port, threads, hub: new EventEmitter<AgentHubEvents>(), log: () => undefined });
+    expect(restarted.devRootsOf(M)).toEqual(["/home/leonardo/dev"]);
+    expect(restarted.discoveredOf(M)).toEqual([]);
+    restarted.dispose();
+  });
+
   it("agent.projects atualiza raízes e descobertos, sem postar nada, mesmo com a máquina silenciada", async () => {
     emit(hello());
     await settle();

@@ -45,6 +45,8 @@ export interface Machine {
   claudeVersion: string | null;
   claudeAccount: string | null;
   filterAccount: string | null;
+  /** Raízes dev do último `agent.hello`/`agent.projects`; `null` = agente anterior às raízes dev (ou nunca visto). */
+  devRoots: string[] | null;
 }
 export interface MachineMeta {
   os?: string;
@@ -102,7 +104,19 @@ function toMachine(r: Row): Machine {
     claudeVersion: str(r["claude_version"]),
     claudeAccount: str(r["claude_account"]),
     filterAccount: str(r["filter_account"]),
+    devRoots: parseRoots(r["dev_roots"]),
   };
+}
+
+/** Coluna JSON `dev_roots`; valor ilegível conta como ausente (modo antigo, o mais restritivo). */
+function parseRoots(v: unknown): string[] | null {
+  if (typeof v !== "string") return null;
+  try {
+    const a: unknown = JSON.parse(v);
+    return Array.isArray(a) && a.every((x) => typeof x === "string") ? a : null;
+  } catch {
+    return null;
+  }
 }
 function toSession(r: Row): Session {
   return {
@@ -137,7 +151,8 @@ function toCommand(r: Row): PendingCommand {
   };
 }
 
-const MIGRATIONS: readonly string[] = [
+/** Uma entrada por versão do esquema; nunca edite uma já publicada, acrescente outra. Exportado para os testes. */
+export const MIGRATIONS: readonly string[] = [
   `CREATE TABLE machines (
      name TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, channel_id TEXT, last_seen INTEGER,
      os TEXT, claude_version TEXT, claude_account TEXT, filter_account TEXT
@@ -156,6 +171,8 @@ const MIGRATIONS: readonly string[] = [
      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, discord_message_id TEXT
    );
    CREATE INDEX pending_commands_machine ON pending_commands(machine, created_at);`,
+  // 2: raízes dev por máquina (JSON), para o /novo saber, mesmo logo após um restart do relay, que o agente é novo
+  `ALTER TABLE machines ADD COLUMN dev_roots TEXT;`,
 ];
 
 export interface Db {
@@ -173,6 +190,8 @@ export interface Db {
     /** Máquina cujo canal do Discord é `channelId`. */
     getByChannel(channelId: string): Machine | undefined;
     setChannel(name: string, channelId: string): void;
+    /** Grava as raízes dev (`null` = agente antigo, sem raízes dev). */
+    setDevRoots(name: string, devRoots: readonly string[] | null): void;
     /** Liga (`account`) ou desliga (`null`) o filtro de conta do canal da máquina. */
     setFilterAccount(name: string, account: string | null): void;
     touch(name: string, lastSeen: number, meta?: MachineMeta): void;
@@ -273,6 +292,9 @@ export function openDb(path: string): Db {
       },
       setChannel(name, channelId) {
         run("UPDATE machines SET channel_id = ? WHERE name = ?", channelId, name);
+      },
+      setDevRoots(name, devRoots) {
+        run("UPDATE machines SET dev_roots = ? WHERE name = ?", devRoots === null ? null : JSON.stringify(devRoots), name);
       },
       setFilterAccount(name, account) {
         run("UPDATE machines SET filter_account = ? WHERE name = ?", account, name);

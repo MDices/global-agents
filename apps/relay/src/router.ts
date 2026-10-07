@@ -115,8 +115,9 @@ export interface Router {
   /** Pastas de projeto explícitas informadas no último `agent.hello` da máquina. */
   projectsOf(machine: string): string[];
   /**
-   * Raízes dev da máquina (do `agent.hello` ou do `agent.projects` mais recente). `undefined` = agente anterior às
-   * raízes dev: o `/novo` mantém a validação antiga (só os projetos explícitos), porque esse agente não confere a pasta.
+   * Raízes dev da máquina (do `agent.hello` ou do `agent.projects` mais recente, persistidas em `machines.dev_roots`,
+   * então valem até o próximo hello mesmo depois de um restart do relay). `undefined` = agente anterior às raízes dev:
+   * o `/novo` mantém a validação antiga (só os projetos explícitos), porque esse agente não confere a pasta.
    */
   devRootsOf(machine: string): string[] | undefined;
   /** Projetos descobertos dentro das raízes dev, do último `agent.projects`. */
@@ -143,7 +144,6 @@ export function createRouter(deps: RouterDeps): Router {
   const log: Log = deps.log ?? ((m) => { console.error(m); });
   const channelFor = machineChannelResolver(db, port);
   const projects = new Map<string, string[]>();
-  const devRoots = new Map<string, string[]>();
   const discovered = new Map<string, string[]>();
   /** Desde quando a máquina está offline (para o tópico); ausente = online ou nunca vista. */
   const offlineSince = new Map<string, Date>();
@@ -185,12 +185,10 @@ export function createRouter(deps: RouterDeps): Router {
       ...(e.claudeAccount !== undefined ? { claudeAccount: e.claudeAccount } : {}),
     });
     projects.set(machine, [...e.projects]);
-    if (e.devRoots !== undefined) devRoots.set(machine, [...e.devRoots]);
-    else {
-      // agente antigo (ou rebaixado): sem contenção no agente, então nada de caminho livre nem de sugestões descobertas
-      devRoots.delete(machine);
-      discovered.delete(machine);
-    }
+    // Persistido: logo após um restart do relay, com a máquina offline, o /novo ainda sabe que o agente é novo.
+    db.machines.setDevRoots(machine, e.devRoots ?? null);
+    // agente antigo (ou rebaixado): sem contenção no agente, então nada de caminho livre nem de sugestões descobertas
+    if (e.devRoots === undefined) discovered.delete(machine);
     const desired = machineTopic(db, machine);
     const { channelId, topic } = await port.ensureChannel(channelName(machine), desired);
     db.machines.setChannel(machine, channelId);
@@ -211,7 +209,7 @@ export function createRouter(deps: RouterDeps): Router {
   };
 
   const onProjects = (machine: string, e: EventOf<"agent.projects">): Promise<void> => {
-    devRoots.set(machine, [...e.devRoots]);
+    db.machines.setDevRoots(machine, e.devRoots);
     discovered.set(machine, [...e.projects]);
     return Promise.resolve();
   };
@@ -323,10 +321,7 @@ export function createRouter(deps: RouterDeps): Router {
 
   return {
     projectsOf: (machine) => [...(projects.get(machine) ?? [])],
-    devRootsOf: (machine) => {
-      const r = devRoots.get(machine);
-      return r === undefined ? undefined : [...r];
-    },
+    devRootsOf: (machine) => db.machines.getByName(machine)?.devRoots ?? undefined,
     discoveredOf: (machine) => [...(discovered.get(machine) ?? [])],
     teamMembersOf: (sessionId) => [...(rosters.get(sessionId) ?? [])],
     refreshTopic: setTopic,
