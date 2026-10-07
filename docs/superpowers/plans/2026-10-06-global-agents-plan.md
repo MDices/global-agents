@@ -15,7 +15,7 @@
 | Parte | Marco | Arquivo | Tarefas |
 |---|---|---|---|
 | 1 | M1 Observar (Linux) | `2026-10-06-global-agents-plan-part1-observar.md` | T01–T14 |
-| 2 | M2 Comandar | `2026-10-06-global-agents-plan-part2-comandar.md` | T15–T19 |
+| 2 | M2 Comandar | `2026-10-06-global-agents-plan-part2-comandar.md` | T15–T19, T28 (`/claude`), T29 (times), nesta ordem |
 | 3 | M3 Permissões, M4 Windows, M5 Deploy | `2026-10-06-global-agents-plan-part3-permissoes-windows-deploy.md` | T20–T27 |
 
 Executar na ordem. Cada parte termina com software que funciona sozinho (M1: ver sessões deste PC no Discord).

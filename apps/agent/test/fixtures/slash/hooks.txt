@@ -1,0 +1,40 @@
+  24. Graviola
+  25. Fruta-do-conde
+  26. Açaí
+  27. Cupuaçu
+  28. Caqui
+  29. Figo
+  30. Romã
+  31. Framboesa
+  32. Mirtilo
+  33. Amora
+  34. Coco
+  35. Abacate
+  36. Lichia
+  37. Pitaya
+  38. Carambola
+  39. Damasco
+  40. Nectarina
+
+✻ Worked for 4s · done 18:36
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Hooks
+   6 hooks on 3 events
+
+   This menu is read-only. To add or change a hook, edit settings.json or ask Claude. Learn more
+
+     PostToolUse  after tool execution
+   ❯ [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/posttooluse-ski…   vercel@claude-plugins-official · Skill · command
+
+     SessionStart  when a new session is started
+     [Plugin] "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" sessio…   superpowers@claude-plugins-official
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-s…   vercel@claude-plugins-official
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-p…   vercel@claude-plugins-official
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/inject-claude-m…   vercel@claude-plugins-official
+
+     SessionEnd  when a session is ending
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cle…   vercel@claude-plugins-official · command
+
+     All events
+
+   Enter to view · Esc to close

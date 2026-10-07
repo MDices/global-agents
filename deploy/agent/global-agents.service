@@ -1,0 +1,13 @@
+[Unit]
+Description=global-agents (Claude Code ↔ Discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%NODE% %CLI% run%CONFIG%
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

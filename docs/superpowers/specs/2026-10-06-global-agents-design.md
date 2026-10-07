@@ -145,7 +145,8 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
   contas enquanto ativo; `/filtro off` desliga.
 - `turn.prompt` → posta como citação `🧑 prompt` (ou `💬 via Discord` quando `source=remote`, sem repostar o texto).
 - `turn.reply` → fatia em ≤ 1900 chars preferindo quebras de parágrafo; posta em sequência; atualiza emoji de estado
-  no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/30 s por thread.
+  no nome da thread (`🟢 working`, `🟡 waiting`, `⚪ done`, `🔴 error`) no máximo 1×/300 s por thread (o mesmo vale
+  para o tópico do canal): o Discord só aceita ~2 edições de nome/tópico por canal a cada 10 min.
 - `permission.request` → mensagem com embed (ferramenta, descrição, prévia em bloco de código até 1000 chars) e
   botões `Permitir` / `Negar`; clique → `permission.decide`; `permission.resolved` edita o card com o desfecho.
 - Mensagem humana numa thread mapeada → `session.send` → reação ✅ no ack, ❌ no erro, ⏳ se máquina offline
@@ -153,6 +154,43 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 - `/novo prompt:<texto> projeto:<cwd> modo:<default|acceptEdits|plan|bypassPermissions>` no canal → `session.create`
   → thread criada no `ack`. `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
 - Máquina conecta pela primeira vez → cria o canal `#<machine>` na categoria configurada.
+
+### 6.2.1 Comandos do Claude pela thread (`/claude`)
+
+Pedido do Leonardo (06/10): rodar slash commands do Claude Code (ex.: `/compact`, `/usage`) a partir do Discord. O
+socket de inbox entrega texto como "mensagem de outra sessão" e **não executa** slash commands, por desenho da
+Anthropic. Caminho escolhido: o agente abre a sessão com `claude attach <bgId>` num pseudoterminal, digita o comando,
+captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
+
+- Slash command do Discord: `/claude comando:<choice> [args:<texto>]`, só dentro de thread mapeada.
+- Allowlist fechada (v1): `compact` (args opcionais = instruções de foco), `usage`, `cost`, `hooks`, `status`,
+  `context`, `model` (args opcional = alias). Qualquer outro valor é recusado; `clear`, `exit`, `resume`,
+  `login`/`logout` e afins nunca entram.
+- Só funciona em sessões **em background** (têm `bgId`). Sessão interativa aberta num terminal → resposta
+  `essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg`.
+- Sessão com `status: busy` → recusa `sessão ocupada; tente quando o turno terminar` (exceto `usage`/`cost`/`status`,
+  que não mexem na conversa).
+- Resultado: texto da tela capturada, sem ANSI, postado na thread em bloco de código (fatiado pelo `chunkText`).
+- Protocolo: comando `session.slash { commandId, sessionId, command, args? }`; resposta `command.ack` com
+  `result.screen` ou `command.error`.
+
+### 6.2.2 Times de agentes (pedido do Leonardo, 06/10; spike em pesquisa §8)
+
+- O líder é uma sessão normal (tem thread). Teammates **não** ganham thread nem entram em `session.list`.
+- Agente: eventos de hook com `agent_type` (ou `teammate_name`) são de teammate. O agente mantém
+  `teammateSession → { team, name?, leadSessionId }` aprendendo com `TeammateIdle`/`TaskCompleted` (trazem
+  `teammate_name` + `team_name`) e lendo `~/.claude/teams/<team>/config.json` (`leadSessionId`, `members`) enquanto
+  existe. Eventos de teammate nunca viram `session.status`/`turn.*` da sessão dele.
+- Novos eventos: `team.update { leadSessionId, team, members: [{ name, state: "working"|"idle"|"ended" }],
+  tasks: [{ id, subject, status: "pending"|"completed", owner? }] }` (enviado a cada mudança, com debounce de 2 s) e
+  `team.event { leadSessionId, kind: "task_created"|"task_completed"|"teammate_idle"|"teammate_reply"|
+  "teammate_ended"|"teammate_permission", teammate?, taskId?, subject?, text? }`.
+- Relay, thread do líder: uma mensagem **fixada** "👥 Time" editada a cada `team.update` (no máximo 1 edição a cada
+  5 s), e linhas curtas por `team.event` (`📋 tarefa criada`, `✅ alpha concluiu`, `💤 beta ocioso`,
+  `💬 alpha: <resposta curta>` truncada a 300 chars, `🟡 um teammate aguarda permissão no terminal do líder`).
+- Falar com teammate: mensagem na thread do líder começando com `@<nome>` é injetada no líder como
+  `Repasse ao teammate <nome>: <texto>`.
+- Permissões de teammate: sem aprovação remota no v1 (o hook `PermissionRequest` não dispara para eles).
 
 ### 6.3 Segurança
 
@@ -184,7 +222,7 @@ drenado em ordem na reconexão; eventos `session.list` antigos são colapsados (
 | `peerProtocol` ≠ 1 ou formato mudou | `fallback-pty.ts`; evento `agent.warning` visível na thread |
 | Timeout da permissão (30 min) | `deny`; card marca "expirou" |
 | Thread arquivada pelo Discord | Mensagem nova desarquiva automaticamente; relay não precisa agir |
-| Rate limit do Discord | Fila por canal com respeito a `Retry-After`; edições de nome de thread ≤ 1×/30 s |
+| Rate limit do Discord | Fila por canal com respeito a `Retry-After`; edições de nome de thread e tópico de canal ≤ 1×/300 s (limite do Discord: ~2 a cada 10 min) |
 
 ## 9. Testes
 

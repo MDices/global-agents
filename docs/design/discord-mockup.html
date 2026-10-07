@@ -1,0 +1,1336 @@
+<title>Mockup Discord global-agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: página-roteiro em coluna única; cada cenário é uma "janela" do Discord (sempre escura, como a foto do app),
+   cercada por cromo da página que acompanha o tema do leitor. */
+:root {
+  /* cromo da página — dark-first */
+  --bg: #15161a;
+  --surface: #1d1e23;
+  --fg: #e7e7ec;
+  --muted: #9b9daa;
+  --line: #2b2d35;
+  --accent: #8d95ff;
+  --accent-ink: #15161a;
+  --font-display: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  /* janela do Discord — fixa nos dois temas */
+  --dc-rail: #1e1f22;
+  --dc-side: #2b2d31;
+  --dc-bg: #313338;
+  --dc-hover: #2e3035;
+  --dc-sel: #404249;
+  --dc-text: #dbdee1;
+  --dc-head: #f2f3f5;
+  --dc-muted: #949ba4;
+  --dc-faint: #80848e;
+  --dc-line: #3f4147;
+  --dc-embed: #2b2d31;
+  --dc-code: #2b2d31;
+  --dc-codeb: #1e1f22;
+  --dc-blurple: #5865f2;
+  --dc-green: #248046;
+  --dc-red: #da373c;
+  --dc-yellow: #f0b232;
+  --dc-gray: #4e5058;
+  --dc-link: #00a8fc;
+  --dc-quote: #4e5058;
+  --dc-mention: rgba(88, 101, 242, .3);
+  --dc-mention-fg: #c9cdfb;
+  --dc-mentioned-bg: rgba(240, 178, 50, .08);
+  --dc-ok: #23a55a;
+  --dc-kw: #ff7b72;
+  --dc-str: #a5d6ff;
+  --dc-cm: #8b949e;
+  --dc-fn: #d2a8ff;
+  --dc-bot: #57c7ad;
+  --dc-user: #f0a35e;
+  --font-dc: "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-dc-code: Consolas, "Andale Mono WT", "Liberation Mono", "IBM Plex Mono", monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #eeeff4; --surface: #ffffff; --fg: #1b1c22; --muted: #5c5f6d; --line: #d6d8e1;
+    --accent: #3f49c2; --accent-ink: #ffffff; color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #eeeff4; --surface: #ffffff; --fg: #1b1c22; --muted: #5c5f6d; --line: #d6d8e1;
+  --accent: #3f49c2; --accent-ink: #ffffff; color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.page { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 64px; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* topo */
+.intro { display: grid; gap: 12px; max-width: 70ch; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.intro h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 700; letter-spacing: -.01em; }
+.intro p { margin: 0; color: var(--muted); }
+.intro p strong { color: var(--fg); font-weight: 600; }
+
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); margin-inline: -16px; padding-inline: 16px; }
+.nav ol { list-style: none; margin: 0; padding: 10px 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+.nav a { display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap; text-decoration: none; color: var(--fg); font-size: 13px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+.nav a span { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.nav a:hover { border-color: var(--accent); }
+
+/* seção de cenário */
+.scene { display: grid; gap: 16px; scroll-margin-top: 64px; }
+.scene-head { display: grid; gap: 6px; max-width: 75ch; }
+.flow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; color: var(--accent); }
+.scene-head h2 { font-size: 24px; font-weight: 650; }
+.scene-head p { margin: 0; color: var(--muted); }
+.variants { display: grid; gap: 20px; }
+.vlabel { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-bottom: 6px; letter-spacing: .03em; }
+.vlabel b { color: var(--fg); font-weight: 500; }
+
+/* ===== janela do Discord ===== */
+.dc { display: grid; grid-template-columns: 56px 232px minmax(0, 1fr); background: var(--dc-bg); color: var(--dc-text); font-family: var(--font-dc); font-size: 15px; line-height: 1.375; border-radius: 10px; overflow: hidden; border: 1px solid var(--dc-codeb); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.dc.slim { grid-template-columns: minmax(0, 1fr); }
+.rail { background: var(--dc-rail); padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.rail .srv-ic { width: 40px; height: 40px; border-radius: 14px; background: var(--dc-bot); color: var(--dc-rail); font: 700 13px/40px var(--font-dc-code); text-align: center; position: relative; }
+.rail .srv-ic::before { content: ""; position: absolute; left: -8px; top: 8px; width: 4px; height: 24px; border-radius: 0 4px 4px 0; background: var(--dc-head); }
+.rail .sep { width: 28px; height: 2px; background: var(--dc-line); border-radius: 1px; }
+.rail .dot { width: 40px; height: 40px; border-radius: 50%; background: var(--dc-bg); }
+
+.side { background: var(--dc-side); display: flex; flex-direction: column; min-width: 0; }
+.srv { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; font-weight: 600; color: var(--dc-head); border-bottom: 1px solid var(--dc-codeb); font-size: 15px; }
+.srv i { font-style: normal; color: var(--dc-muted); font-size: 12px; }
+.chs { padding: 12px 8px; display: grid; gap: 1px; flex: 1; align-content: start; }
+.cat { font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--dc-muted); text-transform: uppercase; padding: 4px 6px 6px; }
+.ch, .th { border-radius: 4px; padding: 5px 8px; color: var(--dc-muted); font-size: 15px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch .hash { font-size: 20px; line-height: 1; color: var(--dc-faint); width: 18px; text-align: center; }
+.ch.on, .th.on { background: var(--dc-sel); color: var(--dc-head); }
+.ch.unread { color: var(--dc-head); font-weight: 600; }
+.th { position: relative; padding-left: 36px; font-size: 14px; }
+.th::before { content: ""; position: absolute; left: 16px; top: -10px; width: 12px; height: 22px; border-left: 1.5px solid var(--dc-gray); border-bottom: 1.5px solid var(--dc-gray); border-bottom-left-radius: 8px; }
+.th span { overflow: hidden; text-overflow: ellipsis; }
+.me { background: #232428; padding: 8px; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.me .av { width: 32px; height: 32px; font-size: 13px; }
+.me b { color: var(--dc-head); font-weight: 600; display: block; }
+.me small { color: var(--dc-muted); }
+
+.main { display: flex; flex-direction: column; min-width: 0; }
+.hdr { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--dc-codeb); flex-wrap: wrap; }
+.hdr .name { font-weight: 600; color: var(--dc-head); display: flex; align-items: center; gap: 6px; }
+.hdr .hash { font-size: 22px; color: var(--dc-faint); line-height: 1; }
+.hdr .crumb { color: var(--dc-muted); font-weight: 500; }
+.hdr .topic { color: var(--dc-muted); font-size: 14px; border-left: 1px solid var(--dc-line); padding-left: 10px; min-width: 0; }
+.hdr .topic.alert { color: #f5a3a5; }
+.msgs { padding: 14px 0 18px; display: flex; flex-direction: column; }
+.composer { margin: 0 16px 18px; background: #383a40; border-radius: 8px; padding: 11px 14px; color: var(--dc-faint); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.composer .plus { width: 24px; height: 24px; border-radius: 50%; background: #b5bac1; color: #383a40; font-weight: 700; text-align: center; line-height: 24px; flex: none; }
+
+/* mensagem */
+.m { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 16px; padding: 2px 16px 2px 16px; position: relative; }
+.m.first { margin-top: 16px; }
+.m.first:first-child { margin-top: 0; }
+.m:hover { background: var(--dc-hover); }
+.m.mentioned { background: var(--dc-mentioned-bg); box-shadow: inset 2px 0 0 var(--dc-yellow); }
+.av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #fff; flex: none; }
+.av.bot { background: var(--dc-bot); color: var(--dc-rail); font-family: var(--font-dc-code); font-size: 14px; }
+.av.user { background: linear-gradient(135deg, #f0a35e, #c25b2a); font-size: 17px; }
+.av.sm { width: 16px; height: 16px; font-size: 9px; }
+.cts { font-size: 11px; color: var(--dc-faint); text-align: right; padding-top: 4px; opacity: .0; }
+.m:hover .cts { opacity: 1; }
+.mb { min-width: 0; }
+.mh { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.un { font-weight: 600; color: var(--dc-head); font-size: 15px; }
+.un.bot { color: var(--dc-bot); }
+.un.user { color: var(--dc-user); }
+.tag { background: var(--dc-blurple); color: #fff; font-size: 10px; font-weight: 600; padding: 1px 4px 0; border-radius: 3px; line-height: 15px; position: relative; top: -1px; display: inline-flex; gap: 2px; align-items: center; }
+.ts { font-size: 12px; color: var(--dc-faint); }
+.mc { color: var(--dc-text); overflow-wrap: anywhere; }
+.mc p { margin: 0; }
+.mc p + p, .mc p + pre, .mc pre + p, .mc ul + p, .mc p + ul, .mc ol, .mc .sub { margin-top: 4px; }
+.mc ul, .mc ol { margin: 4px 0 0; padding-left: 22px; }
+.mc li { margin: 2px 0; }
+.mc strong { color: var(--dc-head); font-weight: 700; }
+.mc code { font-family: var(--font-dc-code); font-size: 13.5px; background: var(--dc-code); padding: 1px 4px; border-radius: 4px; }
+.mc pre { margin: 6px 0 0; background: var(--dc-code); border: 1px solid var(--dc-codeb); border-radius: 4px; padding: 8px 10px; overflow-x: auto; max-width: 100%; }
+.mc pre code { background: none; padding: 0; font-size: 13.5px; line-height: 1.45; white-space: pre; display: block; }
+.mc blockquote { margin: 4px 0 0; padding: 0 0 0 12px; border-left: 4px solid var(--dc-quote); border-radius: 2px; }
+.mc a, .link { color: var(--dc-link); text-decoration: none; }
+.mc .h3 { font-size: 17px; font-weight: 700; color: var(--dc-head); margin: 6px 0 2px; }
+.sub { font-size: 13px; color: var(--dc-muted); display: block; }
+.edited { font-size: 10px; color: var(--dc-faint); margin-left: 4px; }
+.mention { background: var(--dc-mention); color: var(--dc-mention-fg); border-radius: 3px; padding: 0 2px; font-weight: 500; }
+.chlink { background: var(--dc-mention); color: var(--dc-mention-fg); border-radius: 3px; padding: 0 3px; font-weight: 500; }
+.k { color: var(--dc-kw); } .s { color: var(--dc-str); } .c { color: var(--dc-cm); } .f { color: var(--dc-fn); }
+
+/* referência (reply / slash command) */
+.ref { margin-left: 72px; margin-right: 16px; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dc-muted); position: relative; margin-top: 16px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.ref::before { content: ""; position: absolute; left: -36px; top: 8px; width: 30px; height: 10px; border-left: 2px solid var(--dc-gray); border-top: 2px solid var(--dc-gray); border-top-left-radius: 6px; }
+.ref b { color: var(--dc-user); font-weight: 600; }
+.ref .cmd { color: var(--dc-link); }
+.ref .txt { overflow: hidden; text-overflow: ellipsis; }
+.ref + .m.first { margin-top: 2px; }
+
+/* sistema */
+.sys { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 16px; padding: 4px 16px; color: var(--dc-muted); font-size: 15px; margin-top: 8px; }
+.sys .ic { text-align: center; color: var(--dc-muted); font-size: 16px; }
+.sys b { color: var(--dc-head); font-weight: 600; }
+.sys .ts { margin-left: 4px; }
+.thcard { grid-column: 2; margin-top: 6px; background: var(--dc-side); border-radius: 8px; padding: 10px 14px; max-width: 460px; display: grid; gap: 4px; }
+.thcard .t { color: var(--dc-head); font-weight: 600; }
+.thcard .meta { font-size: 13px; color: var(--dc-link); }
+
+/* embed */
+.em { margin-top: 6px; background: var(--dc-embed); border-left: 4px solid var(--dc-gray); border-radius: 4px; padding: 10px 16px 14px 12px; max-width: 520px; display: grid; gap: 8px; min-width: 0; }
+.em.blurple { border-left-color: var(--dc-blurple); }
+.em.green { border-left-color: var(--dc-ok); }
+.em.red { border-left-color: var(--dc-red); }
+.em.yellow { border-left-color: var(--dc-yellow); }
+.em .au { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--dc-head); }
+.em .tt { font-weight: 700; color: var(--dc-head); font-size: 16px; }
+.em .ds { font-size: 14px; }
+.em .flds { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 14px; }
+.em .fld { min-width: 0; font-size: 14px; }
+.em .fld.full { grid-column: 1 / -1; }
+.em .fld b { display: block; color: var(--dc-head); font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.em .ft { font-size: 12px; color: var(--dc-muted); }
+.em pre { margin-top: 2px; }
+
+/* botões e reações */
+.btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.b { font-family: var(--font-dc); border: 0; border-radius: 8px; height: 32px; padding: 0 16px; font-size: 14px; font-weight: 500; color: #fff; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.b.green { background: var(--dc-green); }
+.b.red { background: var(--dc-red); }
+.b.gray { background: var(--dc-gray); }
+.b.blurple { background: var(--dc-blurple); }
+.b[disabled] { opacity: .5; cursor: not-allowed; }
+.rxs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.rx { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 8px; background: var(--dc-side); border: 1px solid transparent; font-size: 14px; color: var(--dc-text); font-weight: 600; }
+.rx.mine { background: rgba(88,101,242,.15); border-color: var(--dc-blurple); color: var(--dc-mention-fg); }
+.rx small { font-size: 13px; }
+.eph { margin-top: 6px; font-size: 12px; color: var(--dc-muted); display: flex; gap: 6px; align-items: center; }
+.eph a { color: var(--dc-link); }
+
+/* autocomplete de slash command */
+.ac { margin: 0 16px -6px; background: var(--dc-side); border-radius: 8px 8px 0 0; border: 1px solid var(--dc-codeb); border-bottom: 0; padding: 8px 0; display: grid; gap: 0; }
+.ac .hd { font-size: 12px; text-transform: uppercase; font-weight: 600; color: var(--dc-muted); padding: 4px 14px 6px; letter-spacing: .02em; }
+.ac .op { padding: 6px 14px; display: flex; justify-content: space-between; gap: 12px; font-size: 14px; flex-wrap: wrap; }
+.ac .op.sel { background: var(--dc-sel); }
+.ac .op b { color: var(--dc-head); font-weight: 500; font-family: var(--font-dc-code); font-size: 13.5px; }
+.ac .op span { color: var(--dc-muted); font-size: 13px; }
+.slash { color: var(--dc-head); font-weight: 600; }
+.opt { display: inline-flex; border-radius: 4px; overflow: hidden; font-size: 14px; }
+.opt i { font-style: normal; background: #4e5058; color: var(--dc-head); padding: 1px 6px; }
+.opt span { background: #2b2d31; color: var(--dc-text); padding: 1px 6px; }
+
+/* thread browser (cenário 6) */
+.tbrowse { padding: 14px 16px 18px; display: grid; gap: 8px; }
+.trow { background: var(--dc-side); border-radius: 8px; padding: 10px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; }
+.trow .t { color: var(--dc-head); font-weight: 600; }
+.trow .when { font-size: 12px; color: var(--dc-faint); font-variant-numeric: tabular-nums; }
+.trow .last { grid-column: 1 / -1; font-size: 13px; color: var(--dc-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.state { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 4px; font-size: 14px; }
+.state b { font-family: var(--font-mono); font-weight: 500; font-size: 13px; }
+.state span { color: var(--muted); }
+
+/* decisões */
+.decisions { display: grid; gap: 14px; }
+.decisions ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: d; }
+.decisions li { counter-increment: d; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 14px 52px; position: relative; display: grid; gap: 4px; }
+.decisions li::before { content: counter(d); position: absolute; left: 16px; top: 13px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 600 13px/24px var(--font-mono); text-align: center; }
+.decisions li b { font-weight: 600; }
+.decisions li span { color: var(--muted); font-size: 14px; }
+.decisions li em { font-style: normal; font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+.note { font-size: 13px; color: var(--muted); max-width: 75ch; margin: 0; }
+footer.note { border-top: 1px solid var(--line); padding-top: 16px; }
+
+/* time de agentes (cenário 9) */
+.hdr .pins { margin-left: auto; color: var(--dc-muted); font-size: 13px; }
+.tasks { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; margin-top: 2px; }
+.tasks .own { font-family: var(--font-dc-code); font-size: 13px; color: var(--dc-muted); }
+.anno { margin: 6px 16px 2px 72px; padding: 6px 10px; border: 1px dashed var(--dc-gray); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--dc-muted); line-height: 1.45; }
+.anno code { font-family: var(--font-dc-code); font-size: 12px; color: var(--dc-text); }
+.side-anno { margin: 10px 4px 0; white-space: normal; }
+
+@media (max-width: 860px) {
+  .dc { grid-template-columns: minmax(0, 1fr); }
+  .rail { display: none; }
+  .side { border-bottom: 1px solid var(--dc-codeb); }
+  .side .me { display: none; }
+  .srv { height: 40px; }
+  .chs { padding: 8px; }
+}
+@media (max-width: 480px) {
+  .m, .sys { grid-template-columns: 32px minmax(0, 1fr); column-gap: 10px; padding-inline: 10px; }
+  .av { width: 32px; height: 32px; }
+  .ref { margin-left: 52px; margin-right: 10px; }
+  .ref::before { left: -28px; width: 22px; }
+  .hdr { padding: 8px 10px; }
+  .composer { margin-inline: 10px; }
+  .ac { margin-inline: 10px; }
+  .em { padding-right: 10px; }
+  .anno { margin-left: 10px; margin-right: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="page">
+
+<header class="intro">
+  <div class="eyebrow">global-agents · revisão de design · 06/10/2026</div>
+  <h1>Como o bot vai aparecer no Discord</h1>
+  <p>Cada seção abaixo é uma janela simulada do servidor <strong>global-agents</strong>, com um fluxo da spec (<code>2026-10-06-global-agents-design.md</code>, §6 e §7). O conteúdo é de exemplo: projeto gestai, correções de bug, rspec. As janelas ficam sempre no tema escuro do Discord; só o entorno da página segue o seu tema.</p>
+  <p>Mockup ilustrativo feito em HTML. Nada aqui está ligado ao Discord. No fim da página está a lista <strong>Decisões para aprovar</strong>.</p>
+</header>
+
+<nav class="nav" aria-label="Cenários">
+  <ol>
+    <li><a href="#conexao"><span>1</span>Máquina conectou</a></li>
+    <li><a href="#observar"><span>2</span>Observar sessão</a></li>
+    <li><a href="#comandar"><span>3</span>Prompt pela thread</a></li>
+    <li><a href="#novo"><span>4</span>/novo</a></li>
+    <li><a href="#permissao"><span>5</span>Permissão</a></li>
+    <li><a href="#estados"><span>6</span>Estados da thread</a></li>
+    <li><a href="#comandos"><span>7</span>Comandos gerais</a></li>
+    <li><a href="#erros"><span>8</span>Erros e avisos</a></li>
+    <li><a href="#time"><span>9</span>Time de agentes</a></li>
+    <li><a href="#decisoes"><span>✓</span>Decisões</a></li>
+  </ol>
+</nav>
+
+<!-- ============ 1. CONEXÃO ============ -->
+<section class="scene" id="conexao">
+  <div class="scene-head">
+    <div class="flow">§6.2 · máquina conecta pela primeira vez → cria #&lt;machine&gt;</div>
+    <h2>1. Máquina conectou pela primeira vez</h2>
+    <p>O relay cria o canal na categoria configurada e posta as boas-vindas. O nome da máquina é <code>hostname/usuario-do-SO</code>; o canal troca a barra por hífen.</p>
+  </div>
+  <div class="dc">
+    <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+    <aside class="side">
+      <div class="srv">global-agents <i>▾</i></div>
+      <div class="chs">
+        <div class="cat">⌄ global-agents</div>
+        <div class="ch on"><span class="hash">#</span>fedora-leonardo</div>
+        <div class="ch"><span class="hash">#</span>toneli-pc-admin</div>
+      </div>
+      <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+    </aside>
+    <div class="main">
+      <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span><span class="topic">🟢 online · fedora/leonardo · Linux · Claude Code 2.4.1</span></div>
+      <div class="msgs">
+        <div class="sys"><span class="ic">#</span><span>Este é o começo do canal <b>#fedora-leonardo</b>. Criado por <b>global-agents</b> <span class="ts">Hoje às 09:12</span></span></div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 09:12</span></div>
+            <div class="mc">
+              <p>👋 Máquina nova conectada. A partir de agora, cada sessão do Claude Code aberta aqui vira uma thread neste canal.</p>
+              <div class="em green">
+                <div class="tt">fedora/leonardo</div>
+                <div class="flds">
+                  <div class="fld"><b>Sistema</b>Fedora Linux 44<br>kernel 7.1.3</div>
+                  <div class="fld"><b>Claude Code</b>2.4.1</div>
+                  <div class="fld"><b>Conta Anthropic</b>leonardo@exemplo.com.br</div>
+                  <div class="fld full"><b>Projetos para <code>/novo</code></b><code>~/dev/work/gestai</code><br><code>~/dev/work/global-agents</code><br><code>~/dev/work/global-pets</code><br><code>~/dev/pessoal/dotfiles</code></div>
+                  <div class="fld full"><b>Comandos</b><code>/novo</code> cria uma sessão · <code>/sessoes</code> lista as vivas · <code>/parar</code> encerra (dentro da thread) · <code>/filtro</code> silencia outras contas</div>
+                </div>
+                <div class="ft">agente 0.1.0 · conectado às 09:12 · 4 sessões já abertas serão sincronizadas</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="composer"><span class="plus">+</span>Conversar em #fedora-leonardo</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. OBSERVAR ============ -->
+<section class="scene" id="observar">
+  <div class="scene-head">
+    <div class="flow">§7 fluxo 1 · Observar · hook → turn.prompt / session.status → thread → turn.reply em fatias</div>
+    <h2>2. Sessão aberta no terminal aparece</h2>
+    <p>Leonardo abre <code>claude --bg --name correcoes-bugs</code> no gestai e digita o prompt no terminal. O bot cria a thread, cita o prompt, renomeia a thread conforme o estado e posta a resposta final em partes de até 1900 caracteres, quebrando de preferência entre parágrafos. No mockup as partes estão encurtadas.</p>
+  </div>
+  <div class="dc">
+    <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+    <aside class="side">
+      <div class="srv">global-agents <i>▾</i></div>
+      <div class="chs">
+        <div class="cat">⌄ global-agents</div>
+        <div class="ch"><span class="hash">#</span>fedora-leonardo</div>
+        <div class="th on"><span>⚪ correcoes-bugs</span></div>
+        <div class="ch"><span class="hash">#</span>toneli-pc-admin</div>
+      </div>
+      <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+    </aside>
+    <div class="main">
+      <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> ⚪ correcoes-bugs</span></div>
+      <div class="msgs">
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:20</span></div>
+            <div class="mc">
+              <div class="em">
+                <div class="tt">Sessão correcoes-bugs</div>
+                <div class="flds">
+                  <div class="fld"><b>Pasta</b><code>~/dev/work/gestai</code></div>
+                  <div class="fld"><b>Conta</b>leonardo@exemplo.com.br</div>
+                  <div class="fld"><b>Estado</b>🟡 esperando prompt</div>
+                  <div class="fld full"><b>Abrir no terminal</b><code>claude attach 7f3c2a91</code></div>
+                </div>
+                <div class="ft">sessão em background · id 7f3c2a91-0b4e-4d1c-9a55-1e2f7c8d0b33</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="m">
+          <div class="cts">14:21</div>
+          <div class="mb"><div class="mc">
+            <p>🧑 <strong>prompt</strong></p>
+            <blockquote>o rspec de <code>spec/services/faturamento/emitir_nota_spec.rb</code> está quebrando depois do merge da homolog. investiga e corrige, mas não commita ainda</blockquote>
+          </div></div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>🟢 correcoes-bugs</b> <span class="ts">Hoje às 14:21</span></span></div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:29</span></div>
+            <div class="mc">
+              <p>Achei a causa. O merge da <code>homolog</code> trouxe a mudança em <code>Faturamento::EmitirNota</code> que passou a exigir o CNPJ formatado, e a factory <code>:cliente_pj</code> ainda gera o CNPJ só com dígitos.</p>
+              <p class="h3">O que estava acontecendo</p>
+              <ol>
+                <li><code>EmitirNota#call</code> agora chama <code>Documento.normalizar(cliente.cnpj)</code> antes de montar o XML.</li>
+                <li><code>Documento.normalizar</code> levanta <code>ArgumentError</code> quando recebe 14 dígitos sem máscara para cliente PJ (regra nova do commit <code>a3f91c2</code>).</li>
+                <li>A factory usa <code>Faker::Company.brazilian_company_number</code>, que devolve só dígitos.</li>
+              </ol>
+              <p>Resultado: 7 exemplos falhando, todos com o mesmo erro:</p>
+<pre><code>ArgumentError: CNPJ sem máscara para cliente PJ (recebido: "11222333000181")
+  # ./app/services/documento.rb:42:in `normalizar'
+  # ./app/services/faturamento/emitir_nota.rb:18:in `call'</code></pre>
+              <span class="sub">(parte 1/3)</span>
+            </div>
+          </div>
+        </div>
+        <div class="m">
+          <div class="cts">14:29</div>
+          <div class="mb"><div class="mc">
+            <p class="h3">A correção</p>
+            <p>Mantive a regra nova (a SEFAZ rejeita CNPJ sem máscara nesse campo) e corrigi a origem dos dados:</p>
+<pre><code><span class="c"># spec/factories/clientes.rb</span>
+<span class="k">factory</span> <span class="s">:cliente_pj</span>, parent: <span class="s">:cliente</span> <span class="k">do</span>
+  tipo { <span class="s">:pj</span> }
+  cnpj { <span class="f">CNPJ</span>.generate(<span class="k">true</span>) } <span class="c"># 11.222.333/0001-81</span>
+<span class="k">end</span></code></pre>
+            <p>E o <code>normalizar</code> passou a aceitar os dois formatos, para não quebrar a importação de planilha antiga:</p>
+<pre><code><span class="k">def</span> <span class="f">self.normalizar</span>(valor)
+  digitos = valor.to_s.gsub(<span class="s">/\D/</span>, <span class="s">""</span>)
+  <span class="k">raise</span> <span class="f">ArgumentError</span>, <span class="s">"CNPJ inválido"</span> <span class="k">unless</span> digitos.size == 14
+  <span class="f">CNPJ</span>.new(digitos).formatted
+<span class="k">end</span></code></pre>
+            <span class="sub">(parte 2/3)</span>
+          </div></div>
+        </div>
+        <div class="m">
+          <div class="cts">14:29</div>
+          <div class="mb"><div class="mc">
+            <p class="h3">Verificação</p>
+            <ul>
+              <li><code>bundle exec rspec spec/services/faturamento</code> → <strong>48 exemplos, 0 falhas</strong> (antes: 7 falhas)</li>
+              <li><code>bundle exec rspec spec/models/cliente_spec.rb</code> → 23 exemplos, 0 falhas</li>
+              <li>rubocop limpo nos 2 arquivos alterados</li>
+            </ul>
+            <p>Não commitei. Alterados: <code>spec/factories/clientes.rb</code> e <code>app/services/documento.rb</code>. Quer que eu commite na <code>fix/emitir-nota-cnpj</code>?</p>
+            <span class="sub">(parte 3/3)</span>
+          </div></div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>⚪ correcoes-bugs</b> <span class="ts">Hoje às 14:29</span></span></div>
+      </div>
+      <div class="composer"><span class="plus">+</span>Conversar em ⚪ correcoes-bugs</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. COMANDAR ============ -->
+<section class="scene" id="comandar">
+  <div class="scene-head">
+    <div class="flow">§7 fluxo 2 · Mandar prompt · mensagem na thread → allowlist → session.send → ack → ✅</div>
+    <h2>3. Mandar prompt pela thread</h2>
+    <p>Leonardo responde na thread pelo celular. O bot reage ✅ quando o agente confirma a injeção, posta só o rótulo <code>💬 via Discord</code> respondendo à mensagem (sem repetir o texto) e a resposta volta pelo fluxo 1.</p>
+  </div>
+  <div class="variants">
+    <div>
+      <div class="vlabel"><b>Caminho feliz</b> · ack em menos de 1 s</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> ⚪ correcoes-bugs</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 14:34</span></div>
+                <div class="mc"><p>pode commitar. antes roda a suíte inteira de faturamento pra garantir</p></div>
+                <div class="rxs"><span class="rx">✅ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">pode commitar. antes roda a suíte inteira de faturamento pra garantir</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:34</span></div>
+                <div class="mc"><p>💬 <strong>via Discord</strong></p></div>
+              </div>
+            </div>
+            <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>🟢 correcoes-bugs</b> <span class="ts">Hoje às 14:34</span></span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:41</span></div>
+                <div class="mc">
+                  <p>Rodei a suíte inteira de faturamento: <strong>312 exemplos, 0 falhas, 4 pendentes</strong> (os mesmos 4 de antes, com <code>skip</code> por causa da integração com a prefeitura de Itajaí).</p>
+                  <p>Commitado na <code>fix/emitir-nota-cnpj</code>:</p>
+<pre><code>a8e21f0 fix(faturamento): normaliza CNPJ com máscara na emissão de nota</code></pre>
+                </div>
+              </div>
+            </div>
+            <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>⚪ correcoes-bugs</b> <span class="ts">Hoje às 14:41</span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>⏳ Máquina offline</b> · comando fica na fila por 1 h (pending_commands)</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># toneli-pc-admin ›</span> ⚪ ajuste-relatorio-pdf</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 19:05</span></div>
+                <div class="mc"><p>troca a fonte do cabeçalho do PDF de boletos pra Roboto e gera um exemplo</p></div>
+                <div class="rxs"><span class="rx">⏳ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="vlabel" style="padding: 10px 16px 0; margin: 0">… 1 hora depois, sem a máquina voltar:</div>
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 19:05</span></div>
+                <div class="mc"><p>troca a fonte do cabeçalho do PDF de boletos pra Roboto e gera um exemplo</p></div>
+                <div class="rxs"><span class="rx">❌ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">troca a fonte do cabeçalho do PDF de boletos pra Roboto e gera um exemplo</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 20:05</span></div>
+                <div class="mc"><p>❌ Não entreguei: a máquina <strong>toneli-pc/admin</strong> ficou offline e o pedido expirou depois de 1 h. Mande de novo quando ela voltar.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>❌ Erro de injeção</b> · command.error com motivo curto</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> ⚪ revisao-pr-412</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 16:10</span></div>
+                <div class="mc"><p>e os testes de request do controller de notas, você olhou?</p></div>
+                <div class="rxs"><span class="rx">❌ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">e os testes de request do controller de notas, você olhou?</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 16:10</span></div>
+                <div class="mc"><p>❌ Sessão encerrada; use <code>/novo</code> em <span class="chlink"># fedora-leonardo</span> para continuar.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>❌ Texto começando com /</b> · comandos do Claude recusados</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> ⚪ correcoes-bugs</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 14:50</span></div>
+                <div class="mc"><p>/compact</p></div>
+                <div class="rxs"><span class="rx">❌ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">/compact</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:50</span></div>
+                <div class="mc"><p>❌ Comandos do Claude não são aceitos pela thread. Mande texto normal, ou use <code>claude attach 7f3c2a91</code> no terminal.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. /NOVO ============ -->
+<section class="scene" id="novo">
+  <div class="scene-head">
+    <div class="flow">§7 fluxo 3 · Criar chat · /novo → session.create → spawn → ack → thread</div>
+    <h2>4. Criar chat novo com /novo</h2>
+    <p>O slash command roda no canal da máquina. <code>projeto</code> sugere as pastas conhecidas da máquina; <code>modo</code> oferece os quatro valores da spec. A thread nasce no <code>ack</code>, antes do primeiro <code>Stop</code>.</p>
+  </div>
+  <div class="variants">
+    <div>
+      <div class="vlabel"><b>Digitando o comando</b> · autocomplete de <code>modo</code></div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span><span class="topic">🟢 online · fedora/leonardo · Linux · Claude Code 2.4.1</span></div>
+          <div class="msgs" style="padding-bottom: 8px"></div>
+          <div class="ac">
+            <div class="hd">modo</div>
+            <div class="op"><b>default</b><span>pede permissão para tudo</span></div>
+            <div class="op sel"><b>acceptEdits</b><span>edita arquivos sem perguntar</span></div>
+            <div class="op"><b>plan</b><span>só planeja, não altera nada</span></div>
+            <div class="op"><b>bypassPermissions</b><span>não pede nenhuma permissão</span></div>
+          </div>
+          <div class="composer"><span class="slash">/novo</span>
+            <span class="opt"><i>prompt</i><span>gera o relatório de inadimplência de setembro por filial em CSV</span></span>
+            <span class="opt"><i>projeto</i><span>~/dev/work/gestai</span></span>
+            <span class="opt"><i>modo</i><span>acceptEdits</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>No canal</b> · resposta do bot, editada quando a thread nasce</div>
+      <div class="dc">
+        <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+        <aside class="side">
+          <div class="srv">global-agents <i>▾</i></div>
+          <div class="chs">
+            <div class="cat">⌄ global-agents</div>
+            <div class="ch on"><span class="hash">#</span>fedora-leonardo</div>
+            <div class="th"><span>🟢 relatorio-inadimplencia</span></div>
+            <div class="th"><span>⚪ correcoes-bugs</span></div>
+            <div class="ch"><span class="hash">#</span>toneli-pc-admin</div>
+          </div>
+          <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+        </aside>
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span><span class="topic">🟢 online · fedora/leonardo · Linux · Claude Code 2.4.1</span></div>
+          <div class="msgs">
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/novo</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:02</span></div>
+                <div class="mc"><p>⏳ Criando sessão em <code>~/dev/work/gestai</code> (modo <code>acceptEdits</code>)…</p></div>
+              </div>
+            </div>
+            <div class="vlabel" style="padding: 10px 16px 0; margin: 0">… 2 s depois, a mesma mensagem editada:</div>
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/novo</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:02</span></div>
+                <div class="mc"><p>✅ Sessão criada: <span class="chlink">🟢 relatorio-inadimplencia</span><span class="edited">(editado)</span></p></div>
+              </div>
+            </div>
+            <div class="sys"><span class="ic">💬</span><span><b>global-agents</b> iniciou uma conversa: <b>🟢 relatorio-inadimplencia</b>. <a class="link">Ver todas as conversas.</a> <span class="ts">Hoje às 15:02</span></span>
+              <div class="thcard"><span class="t">🟢 relatorio-inadimplencia</span><span class="meta">2 mensagens ›</span></div>
+            </div>
+          </div>
+          <div class="composer"><span class="plus">+</span>Conversar em #fedora-leonardo</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Dentro da thread nova</b> · primeira mensagem traz o attach</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> 🟢 relatorio-inadimplencia</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:02</span></div>
+                <div class="mc">
+                  <div class="em blurple">
+                    <div class="tt">Sessão relatorio-inadimplencia</div>
+                    <div class="flds">
+                      <div class="fld"><b>Pasta</b><code>~/dev/work/gestai</code></div>
+                      <div class="fld"><b>Conta</b>leonardo@exemplo.com.br</div>
+                      <div class="fld"><b>Modo</b><code>acceptEdits</code></div>
+                      <div class="fld"><b>Estado</b>🟢 trabalhando</div>
+                      <div class="fld full"><b>Abrir no terminal</b><code>claude attach b91e04d7</code></div>
+                    </div>
+                    <div class="ft">criada por leonardo via /novo</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="m">
+              <div class="cts">15:02</div>
+              <div class="mb"><div class="mc"><p>💬 <strong>via Discord</strong></p></div></div>
+            </div>
+          </div>
+          <div class="composer"><span class="plus">+</span>Conversar em 🟢 relatorio-inadimplencia</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. PERMISSÃO ============ -->
+<section class="scene" id="permissao">
+  <div class="scene-head">
+    <div class="flow">§7 fluxo 4 · Aprovar permissão · PermissionRequest segurado → card → permission.decide → permission.resolved</div>
+    <h2>5. Pedido de permissão</h2>
+    <p>O hook fica segurado até o clique ou até 30 min. A prévia mostra até 1000 caracteres. O desfecho edita o mesmo card e desliga os botões.</p>
+  </div>
+  <div class="variants">
+    <div>
+      <div class="vlabel"><b>Pedido aberto</b> · thread em 🟡 waiting</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> 🟡 correcoes-bugs</span></div>
+          <div class="msgs">
+            <div class="m first mentioned">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:42</span></div>
+                <div class="mc">
+                  <p><span class="mention">@leonardo</span> a sessão está esperando sua decisão.</p>
+                  <div class="em yellow">
+                    <div class="au">🔐 Permissão pedida</div>
+                    <div class="tt">Bash</div>
+                    <div class="ds">Rodar a suíte de specs de faturamento e enviar a branch para o remoto</div>
+<pre><code>bundle exec rspec spec/services/faturamento --format progress \
+  &amp;&amp; git push -u origin fix/emitir-nota-cnpj</code></pre>
+                    <div class="flds">
+                      <div class="fld"><b>Pasta</b><code>~/dev/work/gestai</code></div>
+                      <div class="fld"><b>Expira</b>às 15:12 (em 30 min)</div>
+                    </div>
+                    <div class="ft">correcoes-bugs · fedora/leonardo · pedido 3c9a</div>
+                  </div>
+                  <div class="btns"><button class="b green" type="button">Permitir</button><button class="b red" type="button">Negar</button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Desfecho A</b> · permitido pelo Discord</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:42</span></div>
+                <div class="mc">
+                  <div class="em green">
+                    <div class="au">✅ Permitido por leonardo via Discord às 14:46</div>
+                    <div class="tt">Bash</div>
+                    <div class="ds">Rodar a suíte de specs de faturamento e enviar a branch para o remoto</div>
+<pre><code>bundle exec rspec spec/services/faturamento --format progress \
+  &amp;&amp; git push -u origin fix/emitir-nota-cnpj</code></pre>
+                    <div class="ft">correcoes-bugs · fedora/leonardo · pedido 3c9a</div>
+                  </div>
+                  <div class="btns"><button class="b green" type="button" disabled>Permitido</button><button class="b red" type="button" disabled>Negar</button></div>
+                  <span class="edited">(editado)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Desfecho B</b> · decidido no terminal</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:42</span></div>
+                <div class="mc">
+                  <div class="em">
+                    <div class="au">🖥️ Decidido no terminal às 14:44: permitido</div>
+                    <div class="tt">Bash</div>
+                    <div class="ds">Rodar a suíte de specs de faturamento e enviar a branch para o remoto</div>
+                    <div class="ft">correcoes-bugs · fedora/leonardo · pedido 3c9a</div>
+                  </div>
+                  <span class="edited">(editado)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Desfecho C</b> · expirou depois de 30 min</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 14:42</span></div>
+                <div class="mc">
+                  <div class="em red">
+                    <div class="au">⌛ Expirou às 15:12: negado automaticamente</div>
+                    <div class="tt">Bash</div>
+                    <div class="ds">Rodar a suíte de specs de faturamento e enviar a branch para o remoto</div>
+                    <div class="ft">correcoes-bugs · fedora/leonardo · pedido 3c9a</div>
+                  </div>
+                  <span class="edited">(editado)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. ESTADOS ============ -->
+<section class="scene" id="estados">
+  <div class="scene-head">
+    <div class="flow">§6.2 · emoji de estado no nome da thread, editado no máximo 1× a cada 30 s</div>
+    <h2>6. Estados da thread</h2>
+    <p>O nome da thread é <code>&lt;emoji&gt; &lt;name&gt;</code>, truncado em 100 caracteres. As quatro variantes, na barra lateral e na lista de conversas do canal:</p>
+  </div>
+  <div class="states">
+    <div class="state"><b>🟢 working</b><span>Claude está executando um turno.</span></div>
+    <div class="state"><b>🟡 waiting</b><span>Esperando permissão ou um prompt seu.</span></div>
+    <div class="state"><b>⚪ done</b><span>Turno terminou; sessão viva e ociosa.</span></div>
+    <div class="state"><b>🔴 error</b><span>Turno falhou ou a sessão morreu.</span></div>
+  </div>
+  <div class="dc">
+    <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+    <aside class="side">
+      <div class="srv">global-agents <i>▾</i></div>
+      <div class="chs">
+        <div class="cat">⌄ global-agents</div>
+        <div class="ch on"><span class="hash">#</span>fedora-leonardo</div>
+        <div class="th"><span>🟢 relatorio-inadimplencia</span></div>
+        <div class="th"><span>🟡 correcoes-bugs</span></div>
+        <div class="th"><span>⚪ revisao-pr-412</span></div>
+        <div class="th"><span>🔴 migracao-boletos-v2</span></div>
+        <div class="ch unread"><span class="hash">#</span>toneli-pc-admin</div>
+        <div class="th"><span>🟢 deploy-homolog</span></div>
+        <div class="th"><span>⚪ ajuste-relatorio-pdf</span></div>
+      </div>
+      <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+    </aside>
+    <div class="main">
+      <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span><span class="crumb">›</span><span class="name">Conversas</span></div>
+      <div class="tbrowse">
+        <div class="trow"><span class="t">🟢 relatorio-inadimplencia</span><span class="when">agora</span><span class="last">global-agents: 💬 via Discord</span></div>
+        <div class="trow"><span class="t">🟡 correcoes-bugs</span><span class="when">2 min</span><span class="last">global-agents: 🔐 Permissão pedida · Bash</span></div>
+        <div class="trow"><span class="t">⚪ revisao-pr-412</span><span class="when">35 min</span><span class="last">global-agents: Revisei os 14 arquivos do PR. Dois pontos bloqueiam o merge… (parte 2/2)</span></div>
+        <div class="trow"><span class="t">🔴 migracao-boletos-v2</span><span class="when">1 h</span><span class="last">global-agents: 🔴 A sessão parou com erro: PG::UndefinedColumn em boletos.linha_digitavel</span></div>
+      </div>
+      <div class="msgs" style="border-top: 1px solid var(--dc-codeb)">
+        <div class="vlabel" style="padding: 0 16px; margin: 0">Como fica a mensagem de erro dentro de 🔴 migracao-boletos-v2:</div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 13:48</span></div>
+            <div class="mc">
+              <div class="em red">
+                <div class="au">🔴 A sessão parou com erro</div>
+<pre><code>PG::UndefinedColumn: ERROR:  column boletos.linha_digitavel does not exist
+  db/migrate/20261006131500_backfill_linha_digitavel.rb:9</code></pre>
+                <div class="ft">migracao-boletos-v2 · fedora/leonardo · responda aqui para retomar ou use /parar</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. COMANDOS ============ -->
+<section class="scene" id="comandos">
+  <div class="scene-head">
+    <div class="flow">§6.2 · /sessoes, /parar, /filtro e menção ao bot</div>
+    <h2>7. Comandos gerais</h2>
+    <p>Respostas de comando que só interessam a quem chamou (confirmação do <code>/parar</code>) saem como mensagem efêmera.</p>
+  </div>
+  <div class="variants">
+    <div>
+      <div class="vlabel"><b>/sessoes</b> · no canal da máquina</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span></div>
+          <div class="msgs">
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/sessoes</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:10</span></div>
+                <div class="mc">
+                  <div class="em blurple">
+                    <div class="tt">4 sessões vivas em fedora/leonardo</div>
+                    <div class="ds">
+                      🟢 <span class="chlink">relatorio-inadimplencia</span> · <code>~/dev/work/gestai</code> · há 8 min<br>
+                      🟡 <span class="chlink">correcoes-bugs</span> · <code>~/dev/work/gestai</code> · há 50 min<br>
+                      ⚪ <span class="chlink">revisao-pr-412</span> · <code>~/dev/work/gestai</code> · há 2 h<br>
+                      🔴 <span class="chlink">migracao-boletos-v2</span> · <code>~/dev/work/gestai</code> · há 3 h
+                    </div>
+                    <div class="ft">atualizado às 15:10 · filtro de conta desligado</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>/parar</b> · dentro da thread, com confirmação</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> 🔴 migracao-boletos-v2</span></div>
+          <div class="msgs">
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/parar</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:12</span></div>
+                <div class="mc">
+                  <p>Parar a sessão <strong>migracao-boletos-v2</strong>? O processo do Claude Code é encerrado e a thread fica arquivada como histórico.</p>
+                  <div class="btns"><button class="b red" type="button">Parar sessão</button><button class="b gray" type="button">Cancelar</button></div>
+                  <div class="eph">👁 Só você pode ver esta mensagem · <a>Ignorar mensagem</a></div>
+                </div>
+              </div>
+            </div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:12</span></div>
+                <div class="mc"><p>⏹ Sessão parada por leonardo às 15:12.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>/filtro conta:&lt;e-mail&gt;</b> e <b>/filtro off</b> · por canal</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>toneli-pc-admin</span><span class="topic">🟢 online · toneli-pc/admin · Windows 11 · 🔇 filtro: trabalho@exemplo.com.br</span></div>
+          <div class="msgs">
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/filtro</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 09:30</span></div>
+                <div class="mc"><p>🔇 Filtro ligado neste canal: só aparecem sessões da conta <strong>trabalho@exemplo.com.br</strong>. Threads de outras contas ficam em silêncio até <code>/filtro off</code>.</p></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>leonardo</b> usou <span class="cmd">/filtro</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 18:02</span></div>
+                <div class="mc"><p>🔊 Filtro desligado. Todas as sessões da máquina voltam a aparecer, de qualquer conta.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Menção @global-agents</b> · pergunta livre no canal</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>fedora-leonardo</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 15:20</span></div>
+                <div class="mc"><p><span class="mention">@global-agents</span> alguma sessão esperando permissão minha agora?</p></div>
+              </div>
+            </div>
+            <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">@global-agents alguma sessão esperando permissão minha agora?</span></div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:20</span></div>
+                <div class="mc"><p>Uma: <span class="chlink">🟡 correcoes-bugs</span> pediu <strong>Bash</strong> (<code>bundle exec rspec … &amp;&amp; git push</code>) às 14:42 e expira às 15:12. As outras 3 sessões não estão esperando nada.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8. ERROS ============ -->
+<section class="scene" id="erros">
+  <div class="scene-head">
+    <div class="flow">§8 · Erros e resiliência</div>
+    <h2>8. Erros e avisos</h2>
+    <p>Máquina offline aparece no tópico do canal, sem poluir as threads. Aviso de fallback de injeção (<code>agent.warning</code>) aparece dentro da thread afetada.</p>
+  </div>
+  <div class="variants">
+    <div>
+      <div class="vlabel"><b>Máquina offline</b> · bot edita o tópico do canal</div>
+      <div class="dc">
+        <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+        <aside class="side">
+          <div class="srv">global-agents <i>▾</i></div>
+          <div class="chs">
+            <div class="cat">⌄ global-agents</div>
+            <div class="ch"><span class="hash">#</span>fedora-leonardo</div>
+            <div class="ch on"><span class="hash">#</span>toneli-pc-admin</div>
+            <div class="th"><span>🟡 deploy-homolog</span></div>
+            <div class="th"><span>⚪ ajuste-relatorio-pdf</span></div>
+          </div>
+          <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+        </aside>
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="hash">#</span>toneli-pc-admin</span><span class="topic alert">🔴 máquina offline desde 06/10 às 18:40 · comandos ficam na fila por 1 h</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 08:15</span></div>
+                <div class="mc"><p>Quando a máquina volta, o tópico retorna para <code>🟢 online · toneli-pc/admin · Windows 11 · Claude Code 2.4.1</code> e a fila é entregue em ordem.</p><span class="sub">(texto explicativo do mockup, não é postado)</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="composer"><span class="plus">+</span>Conversar em #toneli-pc-admin</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Fallback de injeção</b> · agent.warning na thread</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># toneli-pc-admin ›</span> 🟢 deploy-homolog</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av user">L</div>
+              <div class="mb">
+                <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 10:03</span></div>
+                <div class="mc"><p>confere se a migration da homolog rodou e reinicia o sidekiq</p></div>
+                <div class="rxs"><span class="rx">✅ <small>1</small></span></div>
+              </div>
+            </div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 10:03</span></div>
+                <div class="mc">
+                  <div class="em yellow">
+                    <div class="au">⚠️ Formato do inbox mudou, usando modo compatível</div>
+                    <div class="ds">O Claude Code desta máquina respondeu com <code>peerProtocol 2</code>. Os prompts desta sessão vão pelo terminal simulado: funcionam, mas podem demorar alguns segundos a mais.</div>
+                    <div class="ft">deploy-homolog · toneli-pc/admin · Claude Code 2.5.0</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="m">
+              <div class="cts">10:03</div>
+              <div class="mb"><div class="mc"><p>💬 <strong>via Discord</strong></p></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="vlabel"><b>Permissão expirada</b> · card editado + aviso na thread</div>
+      <div class="dc slim">
+        <div class="main">
+          <div class="hdr"><span class="name"><span class="crumb"># toneli-pc-admin ›</span> 🔴 deploy-homolog</span></div>
+          <div class="msgs">
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 10:20</span></div>
+                <div class="mc">
+                  <div class="em red">
+                    <div class="au">⌛ Expirou às 10:50: negado automaticamente</div>
+                    <div class="tt">PowerShell</div>
+                    <div class="ds">Reiniciar o serviço do Sidekiq na homolog</div>
+<pre><code>Restart-Service -Name "sidekiq-gestai-homolog"</code></pre>
+                    <div class="ft">deploy-homolog · toneli-pc/admin · pedido 81fe</div>
+                  </div>
+                  <span class="edited">(editado)</span>
+                </div>
+              </div>
+            </div>
+            <div class="m first">
+              <div class="av bot">ga</div>
+              <div class="mb">
+                <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 10:50</span></div>
+                <div class="mc"><p>A permissão para <strong>PowerShell</strong> expirou sem resposta e foi negada. O Claude seguiu sem rodar o comando; mande uma mensagem aqui se quiser que ele tente de novo.</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 9. TIME DE AGENTES ============ -->
+<section class="scene" id="time">
+  <div class="scene-head">
+    <div class="flow">§6.2.2 · Times de agentes · hooks de teammate → team.update / team.event → thread do líder (painel fixado + linhas curtas)</div>
+    <h2>9. Time de agentes</h2>
+    <p>No terminal, Leonardo pede um time à sessão <code>refatorar-crm</code>. O líder continua sendo uma sessão normal, com thread. Os teammates <code>alpha</code>, <code>beta</code> e <code>gama</code> aparecem dentro dela: um painel fixado, editado a cada mudança (no máximo 1× a cada 5 s), e uma linha curta por evento.</p>
+  </div>
+  <div class="dc">
+    <div class="rail"><div class="srv-ic">ga</div><div class="sep"></div><div class="dot"></div></div>
+    <aside class="side">
+      <div class="srv">global-agents <i>▾</i></div>
+      <div class="chs">
+        <div class="cat">⌄ global-agents</div>
+        <div class="ch"><span class="hash">#</span>fedora-leonardo</div>
+        <div class="th on"><span>🟢 refatorar-crm</span></div>
+        <div class="th"><span>⚪ correcoes-bugs</span></div>
+        <div class="ch"><span class="hash">#</span>toneli-pc-admin</div>
+        <div class="anno side-anno">👥 teammates não ganham thread própria; tudo do time fica na thread do líder</div>
+      </div>
+      <div class="me"><div class="av user">L</div><div><b>leonardo</b><small>Disponível</small></div></div>
+    </aside>
+    <div class="main">
+      <div class="hdr"><span class="name"><span class="crumb"># fedora-leonardo ›</span> 🟢 refatorar-crm</span><span class="pins" title="Mensagens fixadas">📌 1</span></div>
+      <div class="msgs">
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <p>🧑 <strong>prompt</strong></p>
+              <blockquote>crie um time com alpha, beta e gama para revisar o módulo CRM: backend, testes e segurança</blockquote>
+            </div>
+          </div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>🟢 refatorar-crm</b> <span class="ts">Hoje às 15:31</span></span></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <div class="em blurple">
+                <div class="au">👥 Time</div>
+                <div class="tt">session-4e9b1c07 · 3 teammates</div>
+                <div class="flds">
+                  <div class="fld full"><b>Membros</b>🟢 <code>alpha</code> trabalhando · 🟢 <code>beta</code> trabalhando · 🟢 <code>gama</code> trabalhando</div>
+                  <div class="fld full"><b>Tarefas</b>
+                    <div class="tasks">
+                      <span>☐ revisar controllers do CRM</span><span class="own">alpha</span>
+                      <span>☐ cobertura de specs do CRM</span><span class="own">beta</span>
+                      <span>☐ auditoria de segurança (params e autorização)</span><span class="own">gama</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ft">refatorar-crm · fedora/leonardo · atualizado às 15:31</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="sys"><span class="ic">📌</span><span><b>global-agents</b> fixou <a class="link">uma mensagem</a> neste canal. <a class="link">Ver todas as mensagens fixadas.</a> <span class="ts">Hoje às 15:31</span></span></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc"><p>📋 tarefa criada: <strong>revisar controllers do CRM</strong></p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:31</div><div class="mb"><div class="mc"><p>📋 tarefa criada: <strong>cobertura de specs do CRM</strong></p></div></div></div>
+        <div class="m"><div class="cts">15:31</div><div class="mb"><div class="mc"><p>📋 tarefa criada: <strong>auditoria de segurança (params e autorização)</strong></p></div></div></div>
+        <div class="m"><div class="cts">15:36</div><div class="mb"><div class="mc"><p>💬 <strong>alpha:</strong> encontrei 3 N+1 em <code>leads_controller</code>: o <code>index</code> carrega <code>owner</code> e <code>tags</code> sem <code>includes</code>, o <code>show</code> refaz a consulta de atividades por item e o <code>export</code> monta o CSV linha a linha com…</p><span class="sub">resposta curta do teammate, cortada em 300 caracteres</span></div></div></div>
+        <div class="m"><div class="cts">15:38</div><div class="mb"><div class="mc"><p>✅ <strong>beta</strong> concluiu: cobertura de specs do CRM</p></div></div></div>
+        <div class="m"><div class="cts">15:39</div><div class="mb"><div class="mc"><p>🟡 um teammate aguarda permissão no terminal do líder</p></div></div></div>
+        <div class="anno">Sem botões: no v1 não existe aprovação remota de teammate. O pedido aparece só no terminal do líder (o hook <code>PermissionRequest</code> não dispara para teammates); decida lá com <code>claude attach 4e9b1c07</code>.</div>
+
+        <div class="m first">
+          <div class="av user">L</div>
+          <div class="mb">
+            <div class="mh"><span class="un user">leonardo</span><span class="ts">Hoje às 15:41</span></div>
+            <div class="mc"><p>@beta roda também os specs de request</p></div>
+            <div class="rxs"><span class="rx">✅ <small>1</small></span></div>
+          </div>
+        </div>
+        <div class="ref"><div class="av user sm">L</div><b>@leonardo</b><span class="txt">@beta roda também os specs de request</span></div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:41</span></div>
+            <div class="mc"><p>💬 <strong>repassado ao líder → beta</strong></p></div>
+          </div>
+        </div>
+        <div class="anno">O líder recebe <code>Repasse ao teammate beta: roda também os specs de request</code>. Teammates não têm inbox; só o líder fala com eles.</div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:42</span></div>
+            <div class="mc"><p>📋 tarefa criada: <strong>specs de request do CRM</strong></p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:44</div><div class="mb"><div class="mc"><p>✅ <strong>alpha</strong> concluiu: revisar controllers do CRM</p></div></div></div>
+        <div class="m"><div class="cts">15:45</div><div class="mb"><div class="mc"><p>⚫ <strong>alpha</strong> encerrado</p></div></div></div>
+        <div class="m"><div class="cts">15:47</div><div class="mb"><div class="mc"><p>✅ <strong>gama</strong> concluiu: auditoria de segurança (params e autorização)</p></div></div></div>
+        <div class="m"><div class="cts">15:47</div><div class="mb"><div class="mc"><p>💤 <strong>gama</strong> ocioso</p></div></div></div>
+
+        <div class="vlabel" style="padding: 12px 16px 0; margin: 0">… às 15:47, a mesma mensagem fixada, editada (não sai mensagem nova):</div>
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:31</span></div>
+            <div class="mc">
+              <div class="em blurple">
+                <div class="au">👥 Time</div>
+                <div class="tt">session-4e9b1c07 · 3 teammates</div>
+                <div class="flds">
+                  <div class="fld full"><b>Membros</b>⚫ <code>alpha</code> encerrado · 🟢 <code>beta</code> trabalhando · 💤 <code>gama</code> ocioso</div>
+                  <div class="fld full"><b>Tarefas</b>
+                    <div class="tasks">
+                      <span>☑ revisar controllers do CRM</span><span class="own">alpha</span>
+                      <span>☑ cobertura de specs do CRM</span><span class="own">beta</span>
+                      <span>☑ auditoria de segurança (params e autorização)</span><span class="own">gama</span>
+                      <span>☐ specs de request do CRM</span><span class="own">beta</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ft">refatorar-crm · fedora/leonardo · atualizado às 15:47</div>
+              </div>
+              <span class="edited">(editado)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:51</span></div>
+            <div class="mc"><p>✅ <strong>beta</strong> concluiu: specs de request do CRM</p></div>
+          </div>
+        </div>
+        <div class="m"><div class="cts">15:51</div><div class="mb"><div class="mc"><p>💤 <strong>beta</strong> ocioso</p></div></div></div>
+
+        <div class="m first">
+          <div class="av bot">ga</div>
+          <div class="mb">
+            <div class="mh"><span class="un bot">global-agents</span><span class="tag">✓ BOT</span><span class="ts">Hoje às 15:53</span></div>
+            <div class="mc">
+              <p>O time terminou a revisão do módulo CRM. Resumo por frente:</p>
+              <p class="h3">Backend (alpha)</p>
+              <ul>
+                <li><code>LeadsController#index</code>: <code>owner</code> e <code>tags</code> sem <code>includes</code>, 1 + 2N consultas por página.</li>
+                <li><code>LeadsController#show</code>: atividades carregadas uma a uma dentro do partial.</li>
+                <li><code>LeadsController#export</code>: CSV montado com <code>each</code> em vez de <code>find_each</code>, estoura memória acima de 20 mil leads.</li>
+              </ul>
+<pre><code><span class="k">def</span> <span class="f">index</span>
+  <span class="c"># antes: Lead.where(filtros).page(params[:page])</span>
+  @leads = <span class="f">Lead</span>.where(filtros).includes(<span class="s">:owner</span>, <span class="s">:tags</span>).page(params[<span class="s">:page</span>])
+<span class="k">end</span></code></pre>
+              <span class="sub">(parte 1/2)</span>
+            </div>
+          </div>
+        </div>
+        <div class="m">
+          <div class="cts">15:53</div>
+          <div class="mb"><div class="mc">
+            <p class="h3">Testes (beta)</p>
+            <ul>
+              <li>Cobertura do CRM foi de <strong>71% para 88%</strong> com 26 exemplos novos em <code>spec/services/crm</code>.</li>
+              <li><code>bundle exec rspec spec/requests/crm</code> → <strong>34 exemplos, 0 falhas</strong>.</li>
+            </ul>
+            <p class="h3">Segurança (gama)</p>
+            <ul>
+              <li><code>OportunidadesController</code> usa <code>params.permit!</code>: troquei por lista explícita de campos.</li>
+              <li><code>ExportacoesController</code> não checa se o lead é da filial do usuário: falta <code>authorize @lead</code>.</li>
+            </ul>
+            <p>Nada commitado. 6 arquivos alterados em <code>app/controllers/crm</code> e <code>spec/</code>. Quer que eu abra a branch <code>refactor/crm-n-plus-one</code>?</p>
+            <span class="sub">(parte 2/2)</span>
+          </div></div>
+        </div>
+        <div class="sys"><span class="ic">✎</span><span><b>global-agents</b> alterou o nome do canal: <b>⚪ refatorar-crm</b> <span class="ts">Hoje às 15:53</span></span></div>
+      </div>
+      <div class="composer"><span class="plus">+</span>Conversar em ⚪ refatorar-crm</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DECISÕES ============ -->
+<section class="scene decisions" id="decisoes">
+  <div class="scene-head">
+    <div class="flow">para o Leonardo responder</div>
+    <h2>Decisões para aprovar</h2>
+    <p>Escolhas que o mockup já faz e que mudam o código do relay. Diga sim, não ou a alternativa.</p>
+  </div>
+  <ol>
+    <li><b>Emoji de estado no nome da thread</b><span>O nome vira <code>🟢 correcoes-bugs</code> e cada troca gera a linha de sistema "alterou o nome do canal". A alternativa é nome fixo e estado só no embed da primeira mensagem, sem as linhas de sistema e sem o limite de 1×/30 s.</span><em>cenários 2, 6</em></li>
+    <li><b>Fatiar por parágrafo, com sufixo pequeno "(parte i/n)"</b><span>Corta no último parágrafo antes de 1900 caracteres e nunca no meio de um bloco de código (se um bloco passar do limite, fecha e reabre o bloco na parte seguinte). Sufixo em texto menor no fim de cada parte; resposta de parte única não leva sufixo.</span><em>cenário 2</em></li>
+    <li><b>Prompt do terminal como citação com rótulo "🧑 prompt"</b><span>Fica claro que veio do terminal e não foi você digitando no Discord. Alternativa: texto normal em negrito, sem citação.</span><em>cenário 2</em></li>
+    <li><b>"💬 via Discord" como resposta à sua mensagem, sem repetir o texto</b><span>A resposta do bot aponta para a sua mensagem, o que mantém o par pergunta/resposta visível. Alternativa: só a reação ✅, sem mensagem nenhuma do bot.</span><em>cenário 3</em></li>
+    <li><b>Card de permissão com prévia completa (até 1000 caracteres) e menção a você</b><span>O pedido menciona <span style="font-family: var(--font-mono)">@leonardo</span> para gerar notificação no celular. Nos desfechos o card encolhe: some a prévia, ficam a ferramenta, a descrição e quem decidiu.</span><em>cenário 5</em></li>
+    <li><b>Primeira mensagem da thread como embed</b><span>Pasta, conta, estado e <code>claude attach</code> num embed cinza (verde/azul quando criada por <code>/novo</code>). Alternativa: texto simples, mais fácil de copiar no celular.</span><em>cenários 2, 4</em></li>
+    <li><b>Nome da thread criada por /novo derivado do prompt</b><span>"gera o relatório de inadimplência…" virou <code>relatorio-inadimplencia</code>. Alternativa: adicionar uma opção <code>nome</code> ao <code>/novo</code>, ou usar um nome gerado pelo Claude.</span><em>cenário 4</em></li>
+    <li><b>Offline só no tópico do canal; menção ao bot responde perguntas de status</b><span>Nenhuma mensagem é postada quando a máquina cai, para não poluir. A menção <code>@global-agents</code> não está na spec: proposta é responder só sobre sessões e permissões, sem criar sessão.</span><em>cenários 7, 8</em></li>
+    <li><b>Painel "👥 Time" fixado e editado, em vez de uma mensagem nova a cada mudança</b><span>Uma única mensagem fixada com membros, estados e tarefas, editada no máximo 1× a cada 5 s; a thread recebe só as linhas curtas de evento. Alternativa: postar um painel novo a cada <code>team.update</code>, o que deixa o histórico visível mas enche a thread.</span><em>cenário 9</em></li>
+    <li><b>Mostrar respostas curtas dos teammates (<code>💬 alpha: …</code>)</b><span>A última fala do teammate aparece cortada em 300 caracteres, junto dos eventos de tarefa. Alternativa: só eventos de tarefa e de estado (📋 ✅ 💤 ⚫), e o conteúdo chega apenas na resposta final do líder.</span><em>cenário 9</em></li>
+    <li><b><code>@nome</code> na thread do líder para falar com um teammate</b><span>A mensagem que começa com <code>@beta</code> vira <code>Repasse ao teammate beta: …</code> injetado no líder, e o bot confirma com <code>💬 repassado ao líder → beta</code>. Alternativa: não ter atalho e você mesmo pedir ao líder em texto livre.</span><em>cenário 9</em></li>
+  </ol>
+</section>
+
+<footer class="note">Mockup de design. Horários, e-mails, ids de sessão e saídas de comando são exemplos. Limites respeitados: até 2000 caracteres por mensagem (fatias de 1900), prévia de permissão até 1000, nome de thread até 100.</footer>
+
+</div>

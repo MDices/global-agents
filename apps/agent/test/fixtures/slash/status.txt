@@ -1,0 +1,21 @@
+
+✻ Brewed for 4s · done 18:35
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Settings  Status   Config   Usage   Stats
+
+   Version:           2.1.292
+   Session name:      ga-exemplo
+   Session ID:        00000000-0000-4000-8000-000000000000
+   Session kind:      background job · attached
+   Peer address:      uds:/run/user/1000/cc-socks/12345.sock
+   cwd:               /home/leonardo/dev/work/global-agents
+   Login method:      Claude account
+   Organization:      Empresa Exemplo
+   Email:             usuario@exemplo.com
+
+   Model:             opus (claude-opus-5-5)
+   MCP servers:       4 connected, 13 need auth, 1 failed · /mcp
+   Setting sources:   User settings, Enterprise managed settings (remote)
+   Auto mode server:  Enabled
+
+   Esc to cancel

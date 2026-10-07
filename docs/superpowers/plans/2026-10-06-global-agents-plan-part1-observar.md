@@ -594,7 +594,7 @@ git add apps/agent && git commit -m "feat(agent): outbox em disco com colapso de
 
 **Interfaces:**
 - Consumes: `Outbox` (T07), `AgentEvent`, `RelayCommand`, `parseLine`, `serialize` (T02).
-- Produces: `class RelayClient extends EventEmitter` — `constructor({ url, token, certFingerprint?, outbox, hello: () => AgentEvent, backoff?: { minMs = 1000, maxMs = 60000 }, pingMs = 30000 })`; `start()`, `stop()`, `send(ev: AgentEvent): void` (se conectado, escreve; senão, `outbox.append`), `isConnected()`. Emite `"command"` com `RelayCommand` validado, `"connected"`, `"disconnected"`, `"warning"` (string). Comportamento: ao conectar envia `hello()` e drena o outbox; `Authorization: Bearer <token>` no handshake; se `certFingerprint` definido, usa `checkServerIdentity` para comparar o `fingerprint256` do certificado e recusa se diferente (`rejectUnauthorized: false` só nesse caso, porque o cert é autoassinado); ping a cada `pingMs`, termina a conexão se não houver pong em `pingMs`; reconecta com backoff exponencial e jitter; linha recebida que não valida → `"warning"`, nunca lança.
+- Produces: `class RelayClient extends EventEmitter` — `constructor({ url, token, certFingerprint?, outbox, hello: () => AgentEvent, backoff?: { minMs = 1000, maxMs = 60000 }, pingMs = 30000 })`; `start()`, `stop()`, `send(ev: AgentEvent): void` (se conectado, escreve; senão, `outbox.append`), `isConnected()`. Emite `"command"` com `RelayCommand` validado, `"connected"`, `"disconnected"`, `"warning"` (string). Comportamento: ao conectar envia `hello()` e drena o outbox; `Authorization: Bearer <token>` no handshake; se `certFingerprint` definido, o pin é feito num `createConnection` próprio que compara o `fingerprint256` do certificado no `secureConnect` e destrói o socket **antes** do upgrade HTTP (o Bearer nunca sai para um servidor não fixado). **Não usar `checkServerIdentity`**: com `rejectUnauthorized: false` e certificado autoassinado o Node não o chama (verificado na T08); ping a cada `pingMs`, termina a conexão se não houver pong em `pingMs`; reconecta com backoff exponencial e jitter; linha recebida que não valida → `"warning"`, nunca lança.
 
 - [ ] **Step 1: Testes (falham)**
 
@@ -608,7 +608,7 @@ Servidor `ws` falso em porta 0 nos testes (sem TLS para os casos funcionais):
 
 - [ ] **Step 2: Implementação**
 
-Pontos de atenção: `new WebSocket(url, { headers, rejectUnauthorized: !certFingerprint, checkServerIdentity: certFingerprint ? (_h, cert) => cert.fingerprint256.toUpperCase() === certFingerprint.toUpperCase() ? undefined : new Error("fingerprint do relay não confere") : undefined })`; `ws.on("pong")` zera o relógio; `terminate()` no timeout; `setTimeout` de reconexão com `Math.min(maxMs, cur * 2) * (0.8 + Math.random() * 0.4)`; `stop()` cancela timers e fecha com código 1000.
+Pontos de atenção: pinning por `createConnection` + verificação de `fingerprint256` em `secureConnect` (ver acima; implementado em `apps/agent/src/transport/client.ts`); `ws.on("pong")` zera o relógio; `terminate()` no timeout; reconexão com `Math.min(maxMs, cur * 2) * (0.8 + Math.random() * 0.4)`; `stop()` cancela timers e fecha com código 1000.
 
 - [ ] **Step 3: Verificar e commitar**
 
@@ -627,6 +627,7 @@ git add apps/agent && git commit -m "feat(agent): cliente WebSocket com pinning 
 **Interfaces:**
 - Consumes: tudo de T03–T08.
 - Produces: `createAgent(cfg: AgentConfig, deps?: Partial<{ inventory; client; hookServer }>): { start(): Promise<void>; stop(): Promise<void> }` que: sobe `Inventory` e, a cada `changed`, envia `session.list`; sobe `startHookServer` e encaminha `onEvents` → `client.send`; `lookupName` consulta o inventário; monta `hello` com `version` (do package.json), `os`, `osUser`, `claudeVersion` (`claude --version`), `claudeAccount` (`claude auth status` → campo `email` do JSON, se houver), `projects` da config; reenvia `hello` quando `claudeAccount` muda (checar a cada 60 s). Comandos recebidos vão para `handleCommand` (T15) — nesta tarefa, qualquer comando responde `command.error` com `reason: "comandos ainda não suportados"`.
+- **Filtro de teammates (spike de 06/10, spec §6.2.2):** payloads de hook que contêm `agent_type` ou `teammate_name` são de teammates de um time; nesta tarefa eles são **descartados** antes do mapper (não viram `session.status`/`turn.*`), com teste usando um payload `Stop` real de teammate (`{"session_id":"89d41e5b-d50d-4b79-98b7-6ecf1bf4f7b5","cwd":"/home/leonardo/dev/work/global-agents","hook_event_name":"Stop","agent_type":"general-purpose","last_assistant_message":"alpha: docs tem 8 arquivos.","stop_hook_active":false}`). O tratamento completo vem na T29.
 - CLI (`cli.ts`, sem dependência de framework; `process.argv[2]`): `install --relay <url> --token <t> [--fingerprint <fp>] [--project <dir>]...` (grava config, copia scripts para `<dataDir>/hooks/`, chama `installHooks`), `uninstall`, `run`, `status` (GET `/health` local + resumo da config sem o token). Saída em português.
 
 - [ ] **Step 1: Testes (falham)**

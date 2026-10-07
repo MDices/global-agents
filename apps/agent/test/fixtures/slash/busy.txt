@@ -1,0 +1,41 @@
+
+ ▐▛███▛█   Claude Code v2.1.292
+▝▜██████▀  Opus 5.5 with medium effort · Claude
+ ▝▝   ▝▝   ~/dev/work/global-agents
+
+
+❯ Responda apenas OK.
+
+● OK
+
+✢ Sublimating… (3s · ↓ 117 tokens)
+  ⎿  Tip: Use /permissions to pre-approve and pre-deny bash, edit, and MCP tools
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                  Advisor Tool (experimental) is on and may use more tokens · /advisor
+─────────────────────────────────────────────────────────────────────────────────────────────────────────── ga-exemplo ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ~/dev/work/global-agents  feat/m1-observar  🐧 Opus 5.5 Medium  [████░░░░░░] 46%  reset 2h44m  ctx 5%
+  ⏸ plan mode on (shift+tab to cycle) · ← 1 agent

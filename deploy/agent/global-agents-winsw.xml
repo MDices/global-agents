@@ -1,0 +1,20 @@
+<!--
+  ALTERNATIVA OPCIONAL ao Agendador de Tarefas (o caminho padrão é `install --service` no Windows).
+  Use só se precisar de um Serviço do Windows de verdade. O serviço PRECISA rodar como o usuário
+  logado (pipes e ~/.claude são por usuário): o WinSW vai pedir a senha desse usuário na instalação.
+  Ajuste o caminho do app (aqui: %LOCALAPPDATA%\global-agents\app) conforme onde você clonou o repo.
+  Uso: winsw install global-agents-winsw.xml && winsw start global-agents-winsw.xml
+-->
+<service>
+  <id>global-agents</id>
+  <name>global-agents</name>
+  <description>global-agents (Claude Code ↔ Discord)</description>
+  <executable>node</executable>
+  <arguments>"%LOCALAPPDATA%\global-agents\app\apps\agent\dist\cli.js" run</arguments>
+  <logpath>%LOCALAPPDATA%\global-agents\logs</logpath>
+  <onfailure action="restart" delay="10 sec"/>
+  <serviceaccount>
+    <username>%USERDOMAIN%\%USERNAME%</username>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+</service>

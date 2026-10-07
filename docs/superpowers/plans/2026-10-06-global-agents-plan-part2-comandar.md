@@ -154,6 +154,61 @@ git add apps/relay && git commit -m "feat(relay): slash commands /novo, /sessoes
 
 ---
 
+### Task T28 `[O]`: Comandos do Claude pela thread (`/claude`) via `claude attach` em pty
+
+**Files:**
+- Modify: `packages/protocol/src/commands.ts` (novo comando), `packages/protocol/test/commands.test.ts`
+- Create: `apps/agent/src/claude/slash.ts`, `apps/agent/test/slash.test.ts`
+- Modify: `apps/agent/src/commands/handle.ts` (rota `session.slash`), `apps/agent/package.json` (`node-pty` e `@xterm/headless` como dependências; se T23 já adicionou `node-pty` como opcional, reutilizar)
+- Modify: `apps/relay/src/discord/slash.ts` (registrar e tratar `/claude`), `apps/relay/test/slash.test.ts`
+
+**Interfaces:**
+- Consumes: `RelayCommandSchema` (T02), `createCommandHandler` (T17), `Inventory.find` (T04), `cleanEnv` (T03), `chunkText` (T12), `createSlashHandler` e o fluxo de `command.ack` do relay (T18/T19).
+- Produces:
+  - Protocolo: `SLASH_ALLOWLIST = ["compact","usage","cost","hooks","status","context","model"] as const`; `SlashCommandName`; variante `session.slash { commandId, sessionId, command: SlashCommandName, args?: string (max 500) }` em `RelayCommandSchema`.
+  - Agente: `runSlash({ bgId, command, args, claudeBin }, deps?: { spawnPty }): Promise<{ screen: string }>` — abre `claude attach <bgId>` em `node-pty` (120×40, env limpo), espera o prompt estar pronto (tela estável por 1,5 s ou texto `❯`), escreve `/<command>[ <args>]` + `\r`, espera estabilizar (sem novos bytes por 2 s; teto 120 s para `compact`, 20 s para os demais), renderiza a tela com `@xterm/headless` e devolve o texto das linhas não vazias, envia `\x1b` (Esc) e depois `\x1a` (Ctrl+Z), mata o pty se não sair em 3 s.
+  - Handler: `session.slash` → sessão sem `bgId` → `command.error` `essa sessão está aberta num terminal; rode o comando lá ou mande-a para o fundo com /bg`; `status === "busy"` e comando ∉ `{usage,cost,status}` → `command.error` `sessão ocupada; tente quando o turno terminar`; senão `runSlash` → `command.ack { result: { screen } }`.
+  - Relay: `/claude comando:<choice da allowlist> [args:<string>]` dentro de thread mapeada; checa allowlist de usuários; resposta efêmera `executando /<comando>…`; no `ack`, posta na thread `🛠️ /<comando>` + `chunkText` da tela dentro de bloco de código; no `error`, `❌ <reason>`; fora de thread → efêmero `use este comando dentro da thread de uma sessão`.
+
+- [ ] **Step 1: Testes (falham)**
+  - protocolo: `session.slash` com `command: "compact"` válido; `command: "clear"` inválido; `args` com 501 chars inválido.
+  - agente (`slash.test.ts`) com `spawnPty` falso que simula a tela (emite bytes de prompt, ecoa o comando, emite saída e fica parado): `runSlash` escreve exatamente `/usage\r`, depois `\x1b` e `\x1a`, e devolve a tela sem códigos ANSI; `compact` com `args: "foco em testes"` escreve `/compact foco em testes\r`; pty que nunca estabiliza → rejeita com `tempo esgotado` dentro do teto configurável (usar teto de teste curto).
+  - handler: sessão interativa → erro com `/bg`; sessão `busy` + `compact` → erro `ocupada`; sessão `busy` + `usage` → chama `runSlash`.
+  - relay: `/claude comando:usage` em thread mapeada → `hub.send` com `session.slash`; ack com `screen` de 3000 chars → 2 posts em bloco de código; fora de thread → efêmero; usuário fora da allowlist → `sem permissão`.
+  - e2e opcional (`GLOBAL_AGENTS_E2E=1`): sessão `claude --bg` real, `runSlash({ command: "status" })` devolve tela contendo a versão do Claude Code.
+
+- [ ] **Step 2: Implementação e commit**
+
+```bash
+git add packages/protocol apps/agent apps/relay && git commit -m "feat: comandos do Claude pela thread (/claude) via attach em pty"
+```
+
+---
+
+### Task T29 `[O]`: Times de agentes na thread do líder
+
+**Files:**
+- Modify: `packages/protocol/src/events.ts` (+ testes): eventos `team.update` e `team.event` conforme spec §6.2.2.
+- Create: `apps/agent/src/team/tracker.ts`, `apps/agent/test/team-tracker.test.ts`, fixtures `apps/agent/test/fixtures/team-hooks-bg.jsonl` e `team-hooks-tmux.jsonl` (payloads reais do spike de 06/10, copiados de `docs/research` §8 — o coordenador fornece os arquivos no brief).
+- Modify: `apps/agent/src/hooks/mapper.ts` (classificar payload de teammate), `apps/agent/src/main.ts` (ligar o tracker), `apps/agent/src/commands/handle.ts` (`@nome` → texto de repasse).
+- Modify: `apps/relay/src/router.ts`, `apps/relay/src/discord/threads.ts` (mensagem fixada do time + linhas curtas), testes correspondentes.
+
+**Interfaces:**
+- Consumes: `mapHookPayload` (T05), `Inventory` (T04), `ThreadRegistry`/`DiscordPort` (T13) acrescido de `pin(messageId)` e `edit(messageId, text)`, `createCommandBridge` (T18).
+- Produces:
+  - `isTeammatePayload(p): boolean` (tem `agent_type` ou `teammate_name`).
+  - `class TeamTracker` — `observe(payload)`; `teamsDir` injetável; resolve `leadSessionId` pelo `config.json` do time (cache enquanto existir) ou pelo prefixo `session-<8>` do `team_name`; emite `team.update` (debounce 2 s) e `team.event`; ao receber `Stop` de teammate com nome conhecido emite `teammate_reply` com `last_assistant_message` truncado a 300; `Notification` `permission_prompt` no líder com teammate ativo → `teammate_permission`.
+  - Relay: thread do líder ganha mensagem fixada `👥 Time` (membros com estado e lista de tarefas) editada no máximo 1×/5 s; `team.event` vira linha curta; mensagem na thread do líder começando com `@<nome>` vira `session.send` com texto `Repasse ao teammate <nome>: <resto>`.
+
+- [ ] **Step 1: Testes (falham)** — replay dos dois fixtures pelo `TeamTracker` produz: membros `alpha`/`beta`, tarefas com status final `completed`, `teammate_reply` de alpha com o texto real; **nenhum** `session.status`/`turn.*` com `sessionId` de teammate sai do agente; relay: sequência de `team.update` gera 1 `post`+`pin` e depois `edit`s limitados por 5 s (relógio falso); `@alpha foca no backend` na thread do líder → `session.send` com `Repasse ao teammate alpha: foca no backend`.
+- [ ] **Step 2: Implementação e commit**
+
+```bash
+git add packages/protocol apps/agent apps/relay && git commit -m "feat: times de agentes no painel da thread do líder"
+```
+
+---
+
 ## Entrega do M2 (checklist manual)
 
 1. Atualizar relay na VPS (`docker compose up -d --build`) e o agente neste PC.
