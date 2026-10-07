@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AgentEvent } from "@global-agents/protocol";
 import { z } from "zod";
-import { isTeammatePayload, mapHookPayload } from "./mapper.js";
+import { isTeammatePayload, mapHookPayload, type MapperContext } from "./mapper.js";
 
 export interface PermissionPayload {
   session_id: string;
@@ -19,7 +19,7 @@ export interface HookDecision {
 export interface HookServerOptions {
   port: number;
   machine: string;
-  lookupName: (sessionId: string) => string | undefined;
+  lookupName: MapperContext["lookupName"];
   /** Sessão presente no inventário? Usado no filtro de teammates (padrão: nenhuma). */
   isKnownSession?: (sessionId: string) => boolean;
   onEvents: (evs: AgentEvent[]) => void;

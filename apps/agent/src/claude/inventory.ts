@@ -49,14 +49,20 @@ export type RunFn = (args: string[]) => Promise<ExecResult>;
 export class Inventory extends EventEmitter {
   private readonly pollMs: number;
   private readonly run: RunFn;
+  private readonly enrich: (list: SessionInfo[]) => SessionInfo[];
   private list: SessionInfo[] = [];
   private lastJson = "[]";
   private timer: NodeJS.Timeout | undefined;
   private polling = false;
 
-  constructor(opts: { pollMs?: number; run?: RunFn; claudeBin?: string } = {}) {
+  /**
+   * `enrich`: ajusta a lista antes da comparação (ex.: nome pelo título do transcript). Roda a cada poll, então uma
+   * mudança só do enriquecimento (um `/rename`) também emite `changed`.
+   */
+  constructor(opts: { pollMs?: number; run?: RunFn; claudeBin?: string; enrich?: (list: SessionInfo[]) => SessionInfo[] } = {}) {
     super();
     this.pollMs = opts.pollMs ?? 5000;
+    this.enrich = opts.enrich ?? ((l) => l);
     const claudeBin = opts.claudeBin;
     this.run = opts.run ?? ((args) => runClaude(args, { timeoutMs: 15000, ...(claudeBin !== undefined ? { claudeBin } : {}) }));
   }
@@ -78,7 +84,7 @@ export class Inventory extends EventEmitter {
     try {
       const r = await this.run(["agents", "--json"]);
       if (r.code !== 0) throw new Error(`claude agents --json saiu com código ${r.code}: ${r.stderr.trim()}`);
-      const next = parseAgentsJson(r.stdout);
+      const next = this.enrich(parseAgentsJson(r.stdout));
       const json = JSON.stringify(next);
       if (json === this.lastJson) return;
       this.lastJson = json;

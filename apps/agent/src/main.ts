@@ -6,6 +6,7 @@ import { injectPrompt } from "./claude/inject.js";
 import { Inventory, type RunFn } from "./claude/inventory.js";
 import { readRegistry } from "./claude/registry.js";
 import { spawnSession, type SpawnRun } from "./claude/spawn.js";
+import { SessionNamer } from "./claude/titles.js";
 import { grantTrust } from "./claude/trust.js";
 import { resumeViaPty } from "./claude/fallback-pty.js";
 import { runSlash } from "./claude/slash.js";
@@ -61,6 +62,8 @@ export interface AgentDeps {
   discover: (roots: readonly string[]) => Promise<string[]>;
   /** Intervalo da nova varredura das raízes dev (padrão 5 min). */
   projectsScanMs: number;
+  /** Nome das sessões pelos títulos do transcript (o real lê `~/.claude/projects`). */
+  namer: SessionNamer;
 }
 
 export interface Agent {
@@ -110,7 +113,8 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
   const devRoots = [...new Set(cfg.devRoots.map((r) => normalizeDir(r)))];
   const run: SpawnRun =
     deps.run ?? ((args, opts) => runClaude(args, { timeoutMs: 15000, ...opts, claudeBin: cfg.claudeBin }));
-  const inventory: InventoryLike = deps.inventory ?? new Inventory({ claudeBin: cfg.claudeBin });
+  const namer = deps.namer ?? new SessionNamer();
+  const inventory: InventoryLike = deps.inventory ?? new Inventory({ run: (args) => run(args), enrich: (l) => namer.enrich(l) });
   const makeClient = deps.client ?? ((opts: RelayClientOptions) => new RelayClient(opts));
   const hookServerFactory = deps.hookServer ?? startHookServer;
   const accountCheckMs = deps.accountCheckMs ?? 60_000;
@@ -177,9 +181,10 @@ export function createAgent(cfg: AgentConfig, deps: Partial<AgentDeps> = {}): Ag
     if ((await scanProjects()) && client !== undefined) client.send(projectsEvent());
   };
 
-  const lookupName = (sessionId: string): string | undefined => {
-    const name = inventory.find(sessionId)?.name;
-    return name !== undefined && name !== "" ? name : undefined;
+  /** Mesma prioridade do `session.list` (o inventário já vem enriquecido): o nome não oscila entre hook e poll. */
+  const lookupName = (sessionId: string, hint: { cwd: string; transcriptPath?: string }): string | undefined => {
+    if (hint.transcriptPath !== undefined) namer.remember(sessionId, hint.transcriptPath);
+    return namer.name(sessionId, hint.cwd, inventory.find(sessionId)?.name, hint.transcriptPath);
   };
 
   const onChanged = (sessions: SessionInfo[]): void => {

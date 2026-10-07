@@ -1,10 +1,13 @@
-import { basename, win32 } from "node:path";
 import { newEnvelope, type AgentEvent } from "@global-agents/protocol";
 import { z } from "zod";
 
 export interface MapperContext {
   machine: string;
-  lookupName: (sessionId: string) => string | undefined;
+  /**
+   * Nome da sessão (título do `/rename`, título automático ou nome do inventário). `undefined` = só se saberia o nome
+   * da pasta: o `session.status` vai sem `name` e o relay mantém o nome já conhecido, em vez de a thread oscilar.
+   */
+  lookupName: (sessionId: string, hint: { cwd: string; transcriptPath?: string }) => string | undefined;
 }
 
 const HookPayloadSchema = z.object({ hook_event_name: z.string(), session_id: z.string(), cwd: z.string() }).passthrough();
@@ -13,10 +16,6 @@ const CROSS_SESSION_PREFIX = "<cross-session-message";
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
-}
-
-function cwdName(cwd: string): string {
-  return cwd.includes("\\") ? win32.basename(cwd) : basename(cwd);
 }
 
 /**
@@ -40,12 +39,13 @@ export function mapHookPayload(payload: unknown, ctx: MapperContext): AgentEvent
   const p = parsed.data;
   const sessionId = p.session_id;
   const cwd = p.cwd;
-  const name = ctx.lookupName(sessionId) ?? cwdName(cwd);
+  const transcriptPath = str(p["transcript_path"]);
+  const name = ctx.lookupName(sessionId, { cwd, ...(transcriptPath !== undefined && transcriptPath !== "" ? { transcriptPath } : {}) });
   const status = (state: "working" | "waiting" | "done", snippet?: string): AgentEvent => ({
     ...newEnvelope(ctx.machine),
     type: "session.status",
     sessionId,
-    name,
+    ...(name !== undefined ? { name } : {}),
     cwd,
     state,
     ...(snippet !== undefined ? { snippet } : {}),
