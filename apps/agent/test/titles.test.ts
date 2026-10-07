@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  defaultProjectsDir, isAutoName, parseTitles, projectSlug, SessionNamer, TitleReader, transcriptPathFor,
+  defaultProjectsDir, isAutoName, isSafeSessionId, parseTitles, projectSlug, SessionNamer, TitleReader, transcriptPathFor,
 } from "../src/claude/titles.js";
 
 const custom = (t: string): string => JSON.stringify({ type: "custom-title", customTitle: t, sessionId: "s1" });
@@ -104,15 +104,42 @@ describe("TitleReader", () => {
 });
 
 describe("isAutoName", () => {
-  it("<pasta>-<2 hex> é automático (formato real de claude agents --json); o resto não", () => {
-    expect(isAutoName("gestai-8d", "/home/leonardo/dev/work/gestai")).toBe(true);
-    expect(isAutoName("global-agents-23", "/home/leonardo/dev/work/global-agents")).toBe(true);
-    expect(isAutoName("gestai-hub-86", "C:\\Users\\Leo\\dev\\gestai-hub")).toBe(true);
-    expect(isAutoName("CRM-Onda5", "/home/leonardo/dev/work/gestai")).toBe(false);
-    expect(isAutoName("gestai", "/home/leonardo/dev/work/gestai")).toBe(false);
-    expect(isAutoName("gestai-8dx", "/home/leonardo/dev/work/gestai")).toBe(false);
-    expect(isAutoName("gestai-zz", "/home/leonardo/dev/work/gestai")).toBe(false);
-    expect(isAutoName("outra-8d", "/home/leonardo/dev/work/gestai")).toBe(false);
+  it("formato genérico <algo>-<2 hex>, sem comparar com a pasta do cwd", () => {
+    expect(isAutoName("gestai-8d")).toBe(true);
+    expect(isAutoName("global-agents-23")).toBe(true);
+    expect(isAutoName("gestai-hub-86")).toBe(true);
+    expect(isAutoName("outra-pasta-e9")).toBe(true); // cwd do inventário diferente da pasta de origem do nome
+    expect(isAutoName("CRM-Onda5")).toBe(false);
+    expect(isAutoName("gestai")).toBe(false);
+    expect(isAutoName("gestai-8dx")).toBe(false);
+    expect(isAutoName("gestai-zz")).toBe(false);
+    expect(isAutoName("gestai-8D")).toBe(false);
+    expect(isAutoName("-8d")).toBe(false);
+  });
+
+  it("custo aceito: um /rename nesse formato perde para o ai-title quando o custom-title saiu da janela", () => {
+    expect(isAutoName("app-b2")).toBe(true);
+    expect(isAutoName("app-v2")).toBe(false);
+  });
+});
+
+describe("session_id inseguro", () => {
+  it("ids com ../ ou separadores não montam caminho", () => {
+    for (const id of ["../../etc/passwd", "..", "a/b", "a\\b", "x.y", ""]) {
+      expect(isSafeSessionId(id)).toBe(false);
+      expect(transcriptPathFor("/home/x/proj", id, "/p")).toBeUndefined();
+    }
+    expect(isSafeSessionId("872c5919-7d1e-46cd-8c4b-69632ecb80ac")).toBe(true);
+  });
+
+  it("SessionNamer não lê fora de projects com um session_id ../ (nem pelo slug, nem pela busca)", () => {
+    const projects = join(dir, "projects");
+    mkdirSync(join(projects, "-home-x-proj"), { recursive: true });
+    writeFileSync(join(dir, "segredo.jsonl"), `${ai("vazou")}\n`);
+    const n = new SessionNamer({ projectsDir: projects });
+    const evil = "../../segredo";
+    expect(n.name(evil, "/home/x/proj", undefined)).toBeUndefined();
+    expect(n.enrich([{ sessionId: evil, name: "", cwd: "/home/x/proj", kind: "interactive" }])[0]?.name).toBe("");
   });
 });
 

@@ -25,6 +25,12 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
+/** `session_id` seguro para montar caminho (`<id>.jsonl`): sem `/`, `\\`, `.` nem `..`. */
+const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+export function isSafeSessionId(sessionId: string): boolean {
+  return SAFE_SESSION_ID.test(sessionId);
+}
+
 /** `~/.claude/projects`, ou `<CLAUDE_CONFIG_DIR>/projects`. */
 export function defaultProjectsDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
   const dir = env["CLAUDE_CONFIG_DIR"];
@@ -36,6 +42,7 @@ export function defaultProjectsDir(env: NodeJS.ProcessEnv = process.env, home: s
  * demais (o Claude Code acrescenta um hash): procura a única pasta com o mesmo prefixo; sem ela, `undefined`.
  */
 export function transcriptPathFor(cwd: string, sessionId: string, projectsDir: string): string | undefined {
+  if (!isSafeSessionId(sessionId)) return undefined;
   const slug = projectSlug(cwd);
   if (slug.length <= SLUG_MAX) return join(projectsDir, slug, `${sessionId}.jsonl`);
   try {
@@ -121,22 +128,19 @@ export interface SessionNamerOptions {
   now?: () => number;
 }
 
-/** Último segmento do caminho, com `/` ou `\\`. */
-function folderName(cwd: string): string {
-  return cwd.split(/[\\/]+/).filter((p) => p !== "").at(-1) ?? cwd;
-}
-
 /**
  * Nome automático que o Claude Code dá a sessões interativas sem nome: `<pasta>-<2 hex>` (`gestai-8d`,
  * `global-agents-23`; `nameSource: "derived"` em `~/.claude/sessions/<pid>.json`). Os 2 caracteres **não** são o
- * início do `sessionId` (`gestai-8d` é a sessão `872c5919…`, `gestai-e9` é a `e0e30914…`), então só o formato é
- * conferido. Um `/rename` para exatamente esse formato seria tratado como automático (perde para o `ai-title`).
+ * início do `sessionId` (`gestai-8d` é a sessão `872c5919…`, `gestai-e9` é a `e0e30914…`). O formato é conferido de
+ * forma genérica, `^.+-[0-9a-f]{2}$`, sem comparar com a pasta do `cwd`: o `cwd` do inventário pode não ser a pasta
+ * de onde o nome foi derivado, e um falso negativo traria de volta o nome opaco. Custo aceito: um `/rename` nesse
+ * formato (`app-v2` não, `app-b2` sim) é tratado como automático e perde para o `ai-title`, mas só quando o
+ * `custom-title` saiu dos 256 KB lidos.
  */
-export function isAutoName(name: string, cwd: string): boolean {
-  const folder = folderName(cwd);
-  if (!name.startsWith(`${folder}-`)) return false;
-  return /^[0-9a-f]{2}$/.test(name.slice(folder.length + 1));
+export function isAutoName(name: string): boolean {
+  return /^.+-[0-9a-f]{2}$/.test(name);
 }
+
 
 /** Quanto esperar para procurar de novo o transcript de uma sessão que ainda não tem (ex.: aberta e nunca usada). */
 const LOCATE_RETRY_MS = 60_000;
@@ -181,6 +185,7 @@ export class SessionNamer {
   private locate(sessionId: string, cwd: string): string | undefined {
     const known = this.transcripts.get(sessionId);
     if (known !== undefined) return known;
+    if (!isSafeSessionId(sessionId)) return undefined;
     const bySlug = transcriptPathFor(cwd, sessionId, this.projectsDir);
     if (bySlug !== undefined && existsSync(bySlug)) return bySlug;
     const last = this.notFoundAt.get(sessionId);
@@ -208,7 +213,7 @@ export class SessionNamer {
   private pick(t: SessionTitles, inv: { name: string; cwd: string } | undefined): string | undefined {
     if (t.customTitle !== undefined) return t.customTitle;
     const name = inv?.name;
-    if (name !== undefined && name !== "" && inv !== undefined && !isAutoName(name, inv.cwd)) return name;
+    if (name !== undefined && name !== "" && inv !== undefined && !isAutoName(name)) return name;
     if (t.aiTitle !== undefined) return t.aiTitle;
     return name !== undefined && name !== "" ? name : undefined;
   }
