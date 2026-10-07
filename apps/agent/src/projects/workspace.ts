@@ -3,10 +3,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { noDevRootText } from "@global-agents/protocol";
 
-/** Nome aceito para cada pasta criada pelo `/novo criar:true`. */
+/** Nome aceito para cada pasta criada pelo `/novo nova_pasta:<nome>`. */
 export const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export const NOT_EXISTS_TEXT = "pasta não existe; use criar:true no /novo para criá-la";
+export const NOT_EXISTS_TEXT = "pasta não existe; use nova_pasta:<nome> no /novo para criá-la";
+/** `create` com pasta que já existe: `typed` é o que o usuário digitou em `nova_pasta`. */
+const existsText = (typed: string): string => `a pasta ${typed} já existe; use projeto:${typed} para abri-la`;
 /** Nomes que o Windows reserva (com ou sem extensão): `CON`, `NUL`, `COM1`, `lpt9.txt`… */
 const WIN_RESERVED_RE = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\..*)?$/i;
 
@@ -115,6 +117,7 @@ async function realOrUndefined(fs: WorkspaceFs, p: string): Promise<string | und
  * - Permitido se estiver dentro de alguma raiz dev ou na lista `projects` explícita. "Dentro" compara o `realpath` do
  *   ancestral existente mais próximo com o `realpath` da raiz: symlink que sai da raiz é negado; a própria raiz vale.
  * - Pasta inexistente só é criada com `create`, dentro de uma raiz, e cada segmento novo precisa casar `SEGMENT_RE`.
+ *   `create` com pasta que já existe é erro (quem quer abri-la usa `projeto`, sem `create`).
  *
  * Erros saem em português e vão para o usuário no Discord.
  */
@@ -157,12 +160,14 @@ export async function resolveWorkspace(cwd: string, create: boolean, policy: Wor
       throw new Error(`a pasta ${abs} está ${where} e não é um projeto configurado`);
     }
     if (missing.length > 0) throw new Error(`${NOT_EXISTS_TEXT} (${abs}); só dá para criar pastas dentro de uma pasta dev`);
+    if (create) throw new Error(existsText(cwd));
     return { cwd: abs, trustPaths: [], created: false };
   }
 
   // O ancestral existente precisa ser pasta: `README.md/sub` daria ENOTDIR cru no mkdir (ou no --bg).
   if (!(await fs.isDirectory(existing))) throw new Error(`${existing} não é uma pasta`);
   let created = false;
+  if (create && missing.length === 0) throw new Error(existsText(cwd));
   if (missing.length > 0) {
     if (!create) throw new Error(`${NOT_EXISTS_TEXT} (${abs})`);
     for (const seg of missing) {

@@ -98,10 +98,21 @@ describe("resolveWorkspace", () => {
     expect(existsSync(join(root, "work", "app-novo"))).toBe(true);
   });
 
-  it("pasta já existente com create → só usa", async () => {
+  it("pasta já existente com create → erro mandando usar projeto", async () => {
     const { root } = sandbox();
-    const r = await resolveWorkspace("gestai", true, { devRoots: [root], projects: [] });
-    expect(r).toMatchObject({ cwd: join(root, "gestai"), created: false });
+    await expect(resolveWorkspace("gestai", true, { devRoots: [root], projects: [] }))
+      .rejects.toThrow("a pasta gestai já existe; use projeto:gestai para abri-la");
+    // sem create, a mesma pasta abre normalmente
+    expect((await resolveWorkspace("gestai", false, { devRoots: [root], projects: [] })).created).toBe(false);
+  });
+
+  it("projeto explícito existente com create → também é erro", async () => {
+    const { root, outside } = sandbox();
+    await expect(resolveWorkspace(outside, true, { devRoots: [root], projects: [outside] })).rejects.toThrow(/já existe; use projeto:/);
+  });
+
+  it("mensagem de pasta inexistente aponta para nova_pasta", () => {
+    expect(NOT_EXISTS_TEXT).toBe("pasta não existe; use nova_pasta:<nome> no /novo para criá-la");
   });
 
   it("nome inválido em segmento novo → negado, nada criado", async () => {

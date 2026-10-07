@@ -238,3 +238,26 @@ describe("concorrência entre conexões (relay no ar + CLI via docker compose ex
     }
   });
 });
+
+describe("migração 3 (header_message_id)", () => {
+  it("sobre um banco da versão 2: acrescenta a coluna, mantém as sessões e grava o id da mensagem", () => {
+    const dir = mkdtempSync(join(tmpdir(), "relay-mig-"));
+    const file = join(dir, "relay.db");
+    const v2 = new DatabaseSync(file);
+    v2.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
+    v2.exec(MIGRATIONS[0] ?? "");
+    v2.exec(MIGRATIONS[1] ?? "");
+    v2.exec("INSERT INTO schema_version (version) VALUES (1), (2)");
+    v2.exec("INSERT INTO sessions (session_id, machine, name, state, updated_at) VALUES ('s1', 'm/u', 'velha', 'done', 1)");
+    v2.close();
+    const db = openDb(file);
+    expect(db.sessions.get("s1")).toMatchObject({ name: "velha", headerMessageId: null });
+    db.sessions.setHeaderMessage("s1", "msg-7");
+    db.sessions.upsert({ sessionId: "s1", machine: "m/u", state: "working", updatedAt: 2 });
+    db.close();
+    const again = openDb(file);
+    expect(again.sessions.get("s1")?.headerMessageId).toBe("msg-7");
+    again.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

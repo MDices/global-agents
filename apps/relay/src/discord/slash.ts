@@ -19,7 +19,9 @@ export const NOT_SESSION_THREAD_TEXT = "use este comando dentro da thread de uma
 export const NO_PROJECTS_TEXT = "esta máquina não informou projetos; rode global-agents install --project <pasta>";
 /** Reexportado para quem já importava daqui; o texto mora no protocolo (o agente usa o mesmo). */
 export { noDevRootText };
-const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar criar:true";
+const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar nova_pasta";
+export const BOTH_FOLDERS_TEXT = "use projeto (pasta existente) ou nova_pasta (pasta a criar), não os dois";
+export const NOVA_PASTA_NAME_ONLY_TEXT = "nova_pasta é só o nome da pasta, criada dentro da pasta dev (ex.: meu-app)";
 export const OFFLINE_TEXT = "máquina offline; o pedido fica na fila por 1 h";
 export const CREATING_TEXT = "criando sessão…";
 /** Validade dos botões de confirmação do `/parar`. */
@@ -73,13 +75,16 @@ export const SLASH_COMMANDS: RESTPostAPIChatInputApplicationCommandsJSONBody[] =
       { type: ApplicationCommandOptionType.String, name: "prompt", description: "O que a sessão deve fazer", required: true, max_length: PROMPT_MAX },
       {
         type: ApplicationCommandOptionType.String, name: "projeto", autocomplete: true, max_length: PROJECT_MAX,
-        description: "Projeto sugerido, caminho relativo à pasta dev ou absoluto (padrão: o primeiro da máquina)",
+        description: "Pasta existente (sugerida, relativa à pasta dev ou absoluta). Padrão: a pasta dev",
+      },
+      {
+        type: ApplicationCommandOptionType.String, name: "nova_pasta", max_length: PROJECT_MAX,
+        description: "Nome da pasta nova, criada dentro da pasta dev (ex.: meu-app ou clientes/app)",
       },
       {
         type: ApplicationCommandOptionType.String, name: "modo", description: "Modo de permissão (padrão: default)",
         choices: PermissionModeSchema.options.map((m) => ({ name: `${m} · ${MODE_HINT[m]}`, value: m })),
       },
-      { type: ApplicationCommandOptionType.Boolean, name: "criar", description: "Cria a pasta dentro da raiz dev se ela não existir" },
     ],
   },
   { name: "sessoes", description: "Lista as sessões desta máquina" },
@@ -181,7 +186,7 @@ export interface MentionMessage {
 
 export interface SlashDeps {
   db: Db;
-  threads: Pick<ThreadRegistry, "ensureThread">;
+  threads: Pick<ThreadRegistry, "ensureThread" | "updateHeader">;
   bridge: Pick<CommandBridge, "submit">;
   router: Pick<Router, "projectsOf" | "devRootsOf" | "discoveredOf" | "refreshTopic">;
   port: Pick<DiscordPort, "reply" | "post">;
@@ -254,9 +259,6 @@ const CreatedSchema = z.object({ sessionId: z.string().min(1), bgId: z.string().
 /** Formato aceito para o `projeto` digitado: o relay só confere isto; quem decide a pasta é o agente. */
 const validProject = (p: string, max = PROJECT_MAX): boolean => p !== "" && p.length <= max && /^\P{Cc}*$/u.test(p);
 
-/** Caminho que o agente resolve sem raiz dev: absoluto (Linux, Windows, UNC) ou com `~`. */
-const looksAbsolute = (p: string): boolean => /^(\/|~|[A-Za-z]:[\\/]|\\\\)/.test(p);
-
 /**
  * Valor de uma sugestão do autocomplete: o caminho absoluto, ou, se passar do limite do Discord (100), o caminho
  * relativo à primeira raiz, que o agente resolve contra a mesma raiz. Fora da primeira raiz e longo demais: omitido.
@@ -294,9 +296,11 @@ const stopButtons = (id: string, disabled: boolean): SlashButton[] => [
  * - `/novo` e a menção mandam `session.create` pela ponte de comandos (mesma fila offline de 1 h); o `commandId` é o
  *   id da interação/mensagem. No ack, a thread nasce com o `bgId` e a resposta vira o link dela. O token de uma
  *   interação vale 15 min: se o pedido ficar mais que isso na fila, a thread nasce mesmo assim e a edição falha (log).
- * - `projeto` aceita um item sugerido, um caminho relativo (à primeira pasta dev) ou absoluto; o relay só confere o
- *   formato e quem decide é o agente (contenção nas pastas dev). Sem `projeto`: a primeira pasta dev, senão o primeiro
- *   projeto explícito, senão o erro com o comando de instalação do sistema da máquina. `criar:true` vira `create` (o agente cria a pasta dentro da pasta dev). Máquina com agente
+ * - `projeto` seleciona só uma pasta existente (item sugerido, caminho relativo à primeira pasta dev ou absoluto); o relay
+ *   só confere o formato e quem decide é o agente (contenção nas pastas dev). `nova_pasta` é o nome da pasta a criar
+ *   dentro da pasta dev e vira `create: true` no `session.create`; os dois juntos são erro. Sem nenhum dos dois: a
+ *   primeira pasta dev, senão o primeiro projeto explícito, senão o erro com o comando de instalação do sistema da
+ *   máquina. Máquina com agente
  *   anterior às pastas dev (hello sem `devRoots`) só aceita os projetos do hello, porque esse agente não confere nada.
  * - `/parar` pede confirmação com botões que valem 60 s; confirmado, manda `session.stop`.
  * - `/filtro` grava `machines.filter_account` e reaplica o tópico do canal; o router silencia a máquina.
@@ -332,21 +336,28 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
 
   /** Valida e monta o `session.create`; devolve o texto de erro quando não dá. */
   const planCreate = (
-    machine: Machine, prompt: string, projeto: string | null, modo: string | null, criar: boolean, commandId: string,
+    machine: Machine, prompt: string, projeto: string | null, novaPasta: string | null, modo: string | null, commandId: string,
   ): { cmd: Extract<RelayCommand, { type: "session.create" }> } | { error: string } => {
     const trimmed = prompt.trim();
     if (trimmed === "") return { error: "o prompt não pode ser vazio" };
     const projects = deps.router.projectsOf(machine.name);
     const roots = deps.router.devRootsOf(machine.name);
     const typed = projeto?.trim() ?? "";
+    const created = novaPasta?.trim() ?? "";
+    const criar = created !== "";
+    if (typed !== "" && criar) return { error: BOTH_FOLDERS_TEXT };
     let cwd: string;
     if (roots === undefined) {
       // agente antigo: ele não confere a pasta, então só os projetos que ele mesmo informou
+      if (criar) return { error: LEGACY_CREATE_TEXT };
       const first = projects[0];
       if (first === undefined) return { error: NO_PROJECTS_TEXT };
       cwd = typed === "" ? first : typed;
       if (!projects.includes(cwd)) return { error: `projeto desconhecido nesta máquina: ${cwd}; escolha um dos sugeridos` };
-      if (criar) return { error: LEGACY_CREATE_TEXT };
+    } else if (criar) {
+      if (/^(\/|\\|~|[A-Za-z]:)/.test(created)) return { error: NOVA_PASTA_NAME_ONLY_TEXT };
+      if (!validProject(created)) return { error: `nova_pasta inválida: use uma linha só, sem caracteres de controle, até ${PROJECT_MAX} caracteres` };
+      cwd = created;
     } else if (typed === "") {
       // a própria raiz vem antes dos projetos explícitos (que viram secundários quando há raiz)
       const fallback = roots[0] ?? projects[0];
@@ -388,7 +399,9 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
             show(failure(`sessão criada, mas a thread não pôde ser criada: ${(e as Error).message}`));
             return;
           }
-          // A thread pode ter nascido antes pelo `session.status` (sem `bgId`): grava o `bgId` para o `/sessoes`.
+          // A thread pode ter nascido antes pelo `session.status` (sem `bgId`): atualiza o cabeçalho dela e grava o
+          // `bgId` para o `/sessoes`.
+          deps.threads.updateHeader(sessionId, { name: cmd.name, cwd, ...(bgId !== undefined ? { bgId } : {}) });
           const row = db.sessions.get(sessionId);
           if (bgId !== undefined && row !== undefined && row.bgId === null) {
             db.sessions.upsert({ sessionId, machine: row.machine, bgId, state: row.state, updatedAt: row.updatedAt });
@@ -411,8 +424,8 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     const machine = machineOr(i);
     if (machine === undefined) return;
     const plan = planCreate(
-      machine, i.options.getString("prompt") ?? "", i.options.getString("projeto"), i.options.getString("modo"),
-      i.options.getBoolean("criar") === true, i.id,
+      machine, i.options.getString("prompt") ?? "", i.options.getString("projeto"), i.options.getString("nova_pasta"),
+      i.options.getString("modo"), i.id,
     );
     if ("error" in plan) {
       reply(i, text(plan.error));
@@ -597,13 +610,9 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     const values = [...new Set(all.filter((p) => p.toLowerCase().includes(needle))
       .map((p) => suggestionValue(p, roots?.[0], windows))
       .filter((v): v is string => v !== undefined))];
-    // Texto livre (pasta nova ou relativa) só vale para agente com pastas dev: vai primeiro quando não é exatamente uma
-    // das sugestões (no Linux `Gestai` e `gestai` são pastas diferentes; no Windows, não). Sem raiz, só caminho
-    // absoluto faz sentido (relativo o agente sempre recusa).
-    const same = (x: string): boolean => (windows ? x.toLowerCase() === needle : x === typed);
-    const echo = roots !== undefined && typed !== "" && validProject(typed, CHOICE_MAX)
-      && (roots.length > 0 || looksAbsolute(typed)) && !all.some(same) && !values.some(same);
-    respond([...(echo ? [typed] : []), ...values].slice(0, LIST_MAX).map((p) => ({ name: p, value: p })));
+    // Sem eco do texto digitado: `projeto` só seleciona pasta existente (o Discord ainda deixa enviar texto livre, e
+    // assim caminhos fundos existentes continuam valendo); pasta nova é a opção `nova_pasta`.
+    respond(values.slice(0, LIST_MAX).map((p) => ({ name: p, value: p })));
   };
 
   const onInteraction = (i: SlashInteraction): void => {
@@ -645,7 +654,7 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       show(MENTION_USAGE_TEXT);
       return;
     }
-    const plan = planCreate(machine, m.text, null, null, false, m.messageId);
+    const plan = planCreate(machine, m.text, null, null, null, m.messageId);
     if ("error" in plan) {
       show(plan.error);
       return;

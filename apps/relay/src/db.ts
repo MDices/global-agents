@@ -60,6 +60,8 @@ export interface Session {
   cwd: string | null;
   threadId: string | null;
   bgId: string | null;
+  /** Mensagem do cabeçalho da thread (o embed da 1ª mensagem), para editá-la depois. */
+  headerMessageId: string | null;
   state: string;
   updatedAt: number;
 }
@@ -126,6 +128,7 @@ function toSession(r: Row): Session {
     cwd: str(r["cwd"]),
     threadId: str(r["thread_id"]),
     bgId: str(r["bg_id"]),
+    headerMessageId: str(r["header_message_id"]),
     state: String(r["state"]),
     updatedAt: Number(r["updated_at"]),
   };
@@ -173,6 +176,8 @@ export const MIGRATIONS: readonly string[] = [
    CREATE INDEX pending_commands_machine ON pending_commands(machine, created_at);`,
   // 2: raízes dev por máquina (JSON), para o /novo saber, mesmo logo após um restart do relay, que o agente é novo
   `ALTER TABLE machines ADD COLUMN dev_roots TEXT;`,
+  // 3: mensagem do cabeçalho da thread, para editá-lo quando chegam `bgId`/nome/pasta depois da criação
+  `ALTER TABLE sessions ADD COLUMN header_message_id TEXT;`,
 ];
 
 export interface Db {
@@ -204,6 +209,7 @@ export interface Db {
     /** Sessão ligada à thread do Discord (a mais recente, se houver mais de uma). */
     getByThread(threadId: string): Session | undefined;
     setThread(sessionId: string, threadId: string): void;
+    setHeaderMessage(sessionId: string, messageId: string): void;
     setState(sessionId: string, state: string, updatedAt: number): void;
     listByMachine(machine: string): Session[];
   };
@@ -331,6 +337,9 @@ export function openDb(path: string): Db {
       },
       setThread(sessionId, threadId) {
         run("UPDATE sessions SET thread_id = ? WHERE session_id = ?", threadId, sessionId);
+      },
+      setHeaderMessage(sessionId, messageId) {
+        run("UPDATE sessions SET header_message_id = ? WHERE session_id = ?", messageId, sessionId);
       },
       setState(sessionId, state, updatedAt) {
         run("UPDATE sessions SET state = ?, updated_at = ? WHERE session_id = ?", state, updatedAt, sessionId);

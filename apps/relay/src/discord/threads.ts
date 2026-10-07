@@ -129,7 +129,24 @@ interface ThreadInfo {
   /** Nome/estado desejados (o último pedido); aplicados no máximo 1×/300 s (`CHANNEL_EDIT_INTERVAL_MS`). */
   name: string;
   state: SessionState;
+  header: HeaderState;
 }
+
+/** O que o cabeçalho (embed da 1ª mensagem) mostra da sessão, além do estado e da conta. */
+interface HeaderState {
+  name: string;
+  cwd?: string;
+  bgId?: string;
+  account: string | null;
+  /** Id da mensagem do cabeçalho; ausente se o post falhou ou a thread é anterior à migração 3 (aí não há o que editar). */
+  messageId?: string;
+  /** Chave (nome, pasta, `bgId`) do último conteúdo postado/editado com sucesso; só uma chave nova gera edição. */
+  appliedKey: string;
+  /** Cadeia por thread: o post inicial e as edições do cabeçalho rodam em ordem, nunca em paralelo. */
+  chain: Promise<void>;
+}
+
+const headerKey = (h: Pick<HeaderState, "name" | "cwd" | "bgId">): string => JSON.stringify([h.name, h.cwd ?? null, h.bgId ?? null]);
 
 function introEmbed(s: ThreadSession, state: SessionState, account: string | null): EmbedSpec {
   const fields = [
@@ -183,7 +200,7 @@ export class ThreadRegistry {
 
     const row = this.db.sessions.get(s.sessionId);
     if (row !== undefined && row.threadId !== null) {
-      this.register(s.sessionId, row.threadId, row.name ?? s.name, parseState(row.state) ?? "done");
+      this.register(s.sessionId, row.threadId, row.name ?? s.name, parseState(row.state) ?? "done", row);
       return Promise.resolve(row.threadId);
     }
 
@@ -210,8 +227,39 @@ export class ThreadRegistry {
     this.schedule(info);
   }
 
+  /**
+   * Atualiza o cabeçalho da thread quando chega nome, pasta ou `bgId` novos (do ack do `session.create`, do
+   * `session.list` ou do status). O primeiro evento de uma sessão criada pelo `/novo` costuma chegar antes do ack, e
+   * a thread nasce sem `bgId`; sem isto o cabeçalho ficaria "sessão interativa" para sempre. Só edita se o conteúdo
+   * mudou (o estado não conta: ele já aparece no nome da thread) e nunca cria thread.
+   */
+  updateHeader(sessionId: string, patch: { name?: string; cwd?: string; bgId?: string }): void {
+    const threadId = this.bySession.get(sessionId);
+    const info = threadId === undefined ? undefined : this.byThread.get(threadId);
+    if (info === undefined) return;
+    const h = info.header;
+    if (patch.name !== undefined) h.name = patch.name;
+    if (patch.cwd !== undefined) h.cwd = patch.cwd;
+    if (patch.bgId !== undefined) h.bgId = patch.bgId;
+    h.chain = h.chain.then(() => this.flushHeader(sessionId, info));
+  }
+
   dispose(): void {
     this.renamer.dispose();
+  }
+
+  /** Edita o cabeçalho com o que há de mais novo, se mudou; erro vira log e a próxima informação tenta de novo. */
+  private async flushHeader(sessionId: string, info: ThreadInfo): Promise<void> {
+    const h = info.header;
+    const key = headerKey(h);
+    if (h.messageId === undefined || key === h.appliedKey) return;
+    const embed = introEmbed({ sessionId, name: h.name, ...(h.cwd !== undefined ? { cwd: h.cwd } : {}), ...(h.bgId !== undefined ? { bgId: h.bgId } : {}) }, info.state, h.account);
+    try {
+      await this.port.editCard(info.threadId, h.messageId, { embed, buttons: [] });
+      h.appliedKey = key;
+    } catch (e) {
+      this.log(`falha ao editar o cabeçalho da thread ${info.threadId}: ${(e as Error).message}`);
+    }
   }
 
   private async create(machine: string, s: ThreadSession, state: SessionState): Promise<string> {
@@ -222,19 +270,41 @@ export class ThreadRegistry {
       ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
       ...(s.bgId !== undefined ? { bgId: s.bgId } : {}),
     });
-    this.register(s.sessionId, threadId, s.name, state);
     const account = s.account ?? this.db.machines.getByName(machine)?.claudeAccount ?? null;
-    try {
-      await this.port.postEmbed(threadId, introEmbed(s, state, account));
-    } catch (e) {
-      this.log(`${machine}: falha ao postar a mensagem inicial da thread ${threadId}: ${(e as Error).message}`);
-    }
+    this.register(s.sessionId, threadId, s.name, state, { name: s.name, cwd: s.cwd ?? null, bgId: s.bgId ?? null, headerMessageId: null }, account);
+    const info = this.byThread.get(threadId);
+    // O post inicial entra na cadeia do cabeçalho: edições que chegarem durante o post esperam o id da mensagem.
+    const posted = (async (): Promise<void> => {
+      try {
+        const { messageId } = await this.port.postEmbed(threadId, introEmbed(s, state, account));
+        if (info !== undefined) info.header.messageId = messageId;
+        this.db.sessions.setHeaderMessage(s.sessionId, messageId);
+      } catch (e) {
+        this.log(`${machine}: falha ao postar a mensagem inicial da thread ${threadId}: ${(e as Error).message}`);
+      }
+    })();
+    if (info !== undefined) info.header.chain = posted;
+    await posted;
     return threadId;
   }
 
-  private register(sessionId: string, threadId: string, name: string, state: SessionState): void {
+  private register(
+    sessionId: string, threadId: string, name: string, state: SessionState,
+    row: { name: string | null; cwd: string | null; bgId: string | null; headerMessageId: string | null; machine?: string },
+    account: string | null = row.machine === undefined ? null : this.db.machines.getByName(row.machine)?.claudeAccount ?? null,
+  ): void {
+    // Limitação aceita: a chave aplicada é semeada com o que o banco tem, supondo o cabeçalho em dia. Se o relay cair
+    // entre o ack (que grava o `bgId`) e a edição, a thread reencontrada não é reparada.
+    const header: HeaderState = {
+      name: row.name ?? name, account, chain: Promise.resolve(),
+      ...(row.cwd !== null ? { cwd: row.cwd } : {}),
+      ...(row.bgId !== null ? { bgId: row.bgId } : {}),
+      ...(row.headerMessageId !== null ? { messageId: row.headerMessageId } : {}),
+      appliedKey: "",
+    };
+    header.appliedKey = headerKey(header);
     this.bySession.set(sessionId, threadId);
-    this.byThread.set(threadId, { threadId, name, state });
+    this.byThread.set(threadId, { threadId, name, state, header });
     this.renamer.seed(threadId, threadName(name, state));
   }
 

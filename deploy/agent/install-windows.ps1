@@ -17,7 +17,7 @@ param(
   [System.Security.SecureString]$Token,
   [string]$Fingerprint,
   [string[]]$Project = @(),
-  # Pastas raiz de desenvolvimento: tudo dentro delas pode virar sessão pelo /novo (inclusive pasta nova, criar:true).
+  # Pastas raiz de desenvolvimento: tudo dentro delas pode virar sessão pelo /novo (inclusive pasta nova, via nova_pasta).
   [string[]]$DevRoot = @(),
   [switch]$SkipBuild
 )
