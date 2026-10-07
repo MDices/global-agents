@@ -192,6 +192,20 @@ export class ThreadRegistry {
     return this.bySession.get(sessionId) ?? this.db.sessions.get(sessionId)?.threadId ?? undefined;
   }
 
+  /**
+   * Thread já existente da sessão, registrada em memória para receber renomeações e edições de cabeçalho; nunca
+   * cria. Depois de um restart do relay a thread só está no banco: sem isto, `rename`/`setState`/`updateHeader`
+   * seriam ignorados até o próximo evento de atividade.
+   */
+  adopt(sessionId: string): string | undefined {
+    const known = this.bySession.get(sessionId);
+    if (known !== undefined) return known;
+    const row = this.db.sessions.get(sessionId);
+    if (row === undefined || row.threadId === null) return undefined;
+    this.register(sessionId, row.threadId, row.name ?? `sessão ${sessionId.slice(0, 8)}`, parseState(row.state) ?? "done", row);
+    return row.threadId;
+  }
+
   ensureThread(machine: string, s: ThreadSession): Promise<string> {
     const known = this.bySession.get(s.sessionId);
     if (known !== undefined) return Promise.resolve(known);

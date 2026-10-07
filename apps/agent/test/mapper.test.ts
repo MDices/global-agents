@@ -61,13 +61,16 @@ describe("mapHookPayload", () => {
     expect(map("lixo")).toEqual([]);
   });
 
-  it("sem nome no lookup → basename(cwd)", () => {
+  it("sem nome no lookup → session.status sem name (o relay mantém o nome conhecido)", () => {
     const evs = map({ ...base, session_id: "zz", cwd: "/home/x/proj", hook_event_name: "SessionEnd" });
-    expect(evs[0]).toMatchObject({ name: "proj" });
+    expect(evs[0]).toMatchObject({ type: "session.status", sessionId: "zz", cwd: "/home/x/proj" });
+    expect(evs[0]).not.toHaveProperty("name");
   });
 
-  it("cwd Windows → basename win32", () => {
-    const evs = map({ ...base, session_id: "zz", cwd: "C:\\Users\\leo\\proj-win", hook_event_name: "SessionEnd" });
-    expect(evs[0]).toMatchObject({ name: "proj-win" });
+  it("lookupName recebe o cwd e o transcript_path do payload", () => {
+    const seen: unknown[] = [];
+    mapHookPayload({ ...base, hook_event_name: "SessionEnd" }, { machine: "m", lookupName: (id, hint) => { seen.push([id, hint]); return undefined; } });
+    mapHookPayload({ ...base, transcript_path: undefined, cwd: "C:\\x", hook_event_name: "SessionEnd" }, { machine: "m", lookupName: (id, hint) => { seen.push([id, hint]); return undefined; } });
+    expect(seen).toEqual([["s1", { cwd: "/home/leonardo/dev/correcoes", transcriptPath: "/tmp/t.jsonl" }], ["s1", { cwd: "C:\\x" }]]);
   });
 });

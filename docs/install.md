@@ -103,6 +103,10 @@ Os backups ficam na própria VPS; copie-os para fora de vez em quando.
 
 Repita o `rsync` do passo 1 e, em `~/global-agents/deploy/relay`, rode `docker compose up -d --build`.
 
+**Ordem:** atualize o relay **antes** dos agentes. O relay novo aceita agentes antigos, mas um relay antigo descarta
+(com aviso no log) eventos que o agente novo manda num formato novo, como o `session.status` sem `name` (sessão da
+qual o agente só sabe o nome da pasta).
+
 ### Rollback / remoção completa
 
 ```bash
@@ -182,6 +186,10 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 | **`EACCES` / "não é gravável" em `data`** | O `./data` foi criado como root. `sudo install -d -o 1000 -g 1000 data` (ou `sudo chown -R 1000:1000 data`) e `docker compose up -d`. |
 | **Porta 8443 não responde de fora** | Confira `sudo iptables -L INPUT --line-numbers -n` (a regra deve vir antes do REJECT) e a security list da Oracle. |
 | **Rate limit do Discord** | O relay enfileira por canal e respeita o `Retry-After`; as mensagens só demoram. Nome de thread e tópico do canal mudam no máximo 1× a cada 5 min (300 s): o Discord só aceita ~2 edições por canal a cada 10 min, então o emoji de estado pode demorar a acompanhar. |
+| **Nome da thread** (de onde vem) | Por prioridade: o `/rename` da sessão (lido do transcript ou de `claude agents`), o título automático do Claude Code (o mesmo que a extensão do VS Code mostra), o nome automático de `claude agents` (ex.: `gestai-8d`) e, por último, o nome da pasta. O agente lê esses títulos do fim do transcript (`~/.claude/projects/…/<sessão>.jsonl`). |
+| **`/rename` não aparece no Discord** | O agente percebe o `/rename` em até 5 s, mas o Discord só aceita renomear a thread 1× a cada 5 min: o nome novo aparece em até ~5 min. Agentes de antes desta versão já mostram o `/rename` (vem em `claude agents`), mas não o título automático; atualize o agente para ver esse título. |
+| **Sessão sem thread** / `/sessoes` mostra "sem atividade ainda" | Esperado: a thread só nasce no primeiro prompt, resposta, notificação ou pedido de permissão (ou no `/novo`). Sessões abertas e nunca usadas não ganham thread. Threads vazias criadas antes desta versão ficam; pode apagá-las no Discord. |
+| **Subagent sem thread própria** | Esperado: subagent comum roda dentro da sessão do pai, e agente com nome (`@telas`) vira teammate, que aparece no painel `👥 Time` e nas linhas da thread do líder. |
 | **Thread arquivada** | Nada a fazer: uma mensagem nova desarquiva a thread automaticamente. |
 | **`esta máquina não tem pasta dev`** no `/novo` | O agente foi instalado sem `--dev-root` nem `--project`. A mensagem traz o comando do sistema da máquina: no Linux `global-agents install --dev-root ~/dev` (sem token) seguido de `systemctl --user restart global-agents`; no Windows `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`, que refaz o build (depois de um `git pull`, é o fluxo de atualização) e já reinicia o agente sozinho. |
 | **`pasta não existe; use nova_pasta:<nome>…`** | A pasta pedida em `projeto` não existe; para criá-la, repita o `/novo` com `nova_pasta` (só funciona dentro de uma pasta dev). |

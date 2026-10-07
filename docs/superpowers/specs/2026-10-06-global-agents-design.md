@@ -59,8 +59,8 @@ na mesma conta do SO não exige nada: hooks, settings, sockets e inventário sã
 |---|---|---|
 | `agent.hello` | `version`, `os`, `osUser`, `claudeVersion`, `claudeAccount` (e-mail de `claude auth status`), `projects[]` (projetos explícitos da config), `devRoots[]?` (pastas raiz de desenvolvimento; ausente = agente anterior às pastas dev, e o relay mantém a validação antiga do `/novo`) | conexão; reenviado quando a conta logada muda |
 | `agent.projects` | `devRoots[]`, `projects[]` (descobertos nas pastas dev: subpastas de 1º nível e repositórios git do 2º, absolutos, até 200) | a cada conexão, depois do `hello`; e quando a varredura (a cada 5 min) muda a lista |
-| `session.list` | `sessions[]` com `sessionId`, `name`, `cwd`, `kind`, `status`, `state?`, `waitingFor?`, `bgId?` | `claude agents --json`, na conexão e a cada mudança (poll 5 s com diff) |
-| `session.status` | `sessionId`, `name`, `cwd`, `state` ∈ `working\|waiting\|done\|error`, `snippet?` | hooks `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd` |
+| `session.list` | `sessions[]` com `sessionId`, `name` (ver §6.2.3), `cwd`, `kind`, `status`, `state?`, `waitingFor?`, `bgId?` | `claude agents --json`, na conexão e a cada mudança (poll 5 s com diff; a mudança só de título também conta) |
+| `session.status` | `sessionId`, `name?` (ausente = o agente só saberia o nome da pasta; o relay mantém o nome conhecido), `cwd`, `state` ∈ `working\|waiting\|done\|error`, `snippet?` | hooks `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd` |
 | `turn.prompt` | `sessionId`, `text`, `source` ∈ `terminal\|remote` | hook `UserPromptSubmit` (`source=remote` quando o texto começa com a tag de cross-session) |
 | `turn.reply` | `sessionId`, `text` (inteiro), `stopReason` | hook `Stop` (`last_assistant_message`) |
 | `permission.request` | `sessionId`, `requestId`, `tool`, `description`, `inputPreview`, `expiresAt` | hook `PermissionRequest` |
@@ -146,7 +146,12 @@ build (só `-SkipBuild` pula) e reinicia a tarefa; o fluxo de atualização é `
 
 ### 6.2 Roteamento
 
-- Evento com `sessionId` sem thread → cria thread no canal da máquina (nome = `name` truncado a 100), grava mapa,
+- **Thread só com atividade.** O `session.list` sozinho não cria thread: grava a sessão no banco (o `/sessoes` lista
+  todas; sem thread, aparece "sem atividade ainda") e atualiza nome, cabeçalho e estado de threads que já existem.
+  Criam a thread: `turn.prompt`, `turn.reply`, `session.status` `working`/`waiting` (prompt e notificação),
+  `permission.request`, `team.update`/`team.event` e o ack do `/novo`. `session.status` `done` sozinho (o
+  `SessionEnd` de uma sessão aberta e fechada sem uso) não cria. Threads vazias antigas ficam como estão.
+- Evento de atividade com `sessionId` sem thread → cria thread no canal da máquina (nome = `name` truncado a 100), grava mapa,
   primeira mensagem: cwd, conta Anthropic logada na máquina naquele momento, `claude attach <bgId>` quando houver,
   estado. **Sem filtro automático por conta**: todas as sessões da máquina aparecem, de qualquer conta logada
   (decisão do Leonardo, 06/10). `/filtro conta:<e-mail>` é opcional e por canal, para silenciar threads de outras
@@ -240,6 +245,60 @@ captura a tela renderizada, fecha diálogos com `Esc` e desanexa com `Ctrl+Z`.
 - Falar com teammate: mensagem na thread do líder começando com `@<nome>` é injetada no líder como
   `Repasse ao teammate <nome>: <texto>`.
 - Permissões de teammate: sem aprovação remota no v1 (o hook `PermissionRequest` não dispara para eles).
+
+### 6.2.3 Nome da thread
+
+- O agente manda o nome da sessão, no `session.list` e nos hooks, por esta prioridade:
+  1. o último `custom-title` do transcript (gravado pelo `/rename`);
+  2. o `name` de `claude agents --json` quando **não** é o automático: ele já reflete o `/rename`, e assim um
+     `custom-title` que saiu dos 256 KB lidos não perde para o `ai-title`;
+  3. o último `ai-title` (o título automático que a extensão do VS Code mostra);
+  4. o `name` automático do inventário, `<pasta>-<2 hex>` (`gestai-8d`). Os 2 caracteres não são o início do
+     `sessionId` (`gestai-8d` é a `872c5919…`, `gestai-e9` é a `e0e30914…`). O agente reconhece o formato genérico
+     `^.+-[0-9a-f]{2}$`, sem comparar com a pasta do `cwd` (o `cwd` do inventário pode não ser a pasta de onde o nome
+     veio). Custo aceito: um `/rename` nesse formato (`app-b2`) perde para o `ai-title`, mas só quando o
+     `custom-title` saiu dos 256 KB lidos;
+  5. o nome da pasta.
+  Vale a **última** linha de cada tipo, e `custom-title` vence `ai-title` em qualquer ordem. O hook usa o nome cru
+  do inventário guardado no último poll (o inventário do agente guarda a lista já enriquecida).
+- Transcript: o `transcript_path` do hook, quando houve (guardado por sessão e reusado no `session.list`); senão
+  `~/.claude/projects/<slug>/<sessionId>.jsonl` (ou `<CLAUDE_CONFIG_DIR>/projects`), com o slug do `cwd` como o Claude
+  Code monta: todo caractere fora de `[A-Za-z0-9]` vira `-` (`/home/leo/dev/app` → `-home-leo-dev-app`,
+  `C:\Users\Leo\app` → `C--Users-Leo-app`). Slug com mais de 200 caracteres ganha um hash do Claude Code: o agente
+  só usa a pasta se houver uma única com o mesmo prefixo. Se o arquivo do slug não existe (o `cwd` do inventário não é a
+  pasta onde o transcript nasceu, ex.: worktree, e o agente reiniciou sem ter visto hook), procura `<sessionId>.jsonl`
+  em todas as pastas de `projects`, no máximo 1×/min por sessão sem transcript. `session_id` fora de
+  `^[A-Za-z0-9_-]+$` (ex.: com `../`) nunca vira caminho.
+- Leitura barata: só os últimos 256 KB do transcript (título fora do trecho não é achado e cai no próximo nível),
+  com cache LRU por caminho com `size` e `mtime` (até 500 entradas). Erro de leitura cai no próximo nível, nunca derruba nada.
+- Sem oscilação: o hook segue a mesma prioridade do `session.list`. Quando só restaria o nome da pasta (nível 5), o
+  agente manda o `session.status` **sem** `name` e o relay mantém o nome já conhecido; para sessão desconhecida, o
+  relay usa o nome da pasta do `cwd`. Agentes antigos ainda mandam o nome da pasta e podem oscilar como antes.
+  **Ordem de deploy:** relay antes dos agentes. O relay antigo descarta (com aviso no log) o `session.status` sem
+  `name`.
+- Renomear a thread segue o limite do Discord (1 edição a cada 300 s por thread): um `/rename` aparece no Discord em
+  até ~5 min (o poll do inventário o percebe em até 5 s).
+
+### 6.2.4 Subagents e teammates (spike de 07/10, Claude Code 2.1.293)
+
+- Agent **sem** `name` (subagent comum, inclusive em background): roda dentro da sessão do pai, com o mesmo
+  `session_id`; hooks `SubagentStart`/`SubagentStop` com `agent_id` e `agent_type`, transcript em
+  `<projeto>/<sessão-pai>/subagents/agent-<id>.jsonl` (+ `.meta.json`). Nunca vira sessão nem thread.
+- Agent **com** `name` (ex.: `telas`): vira **teammate** de um time implícito `session-<8>`: processo próprio
+  (`--agent-name telas --team-name session-… --parent-session-id <pai>`), `session_id` e transcript próprios, fora
+  de `claude agents --json`. Os hooks dele trazem `agent_type`, mas nenhum campo de pai; só `TeammateIdle` traz
+  `teammate_name`/`team_name`. O `config.json` do time lista os membros, mas o `leadSessionId` dele **não** é o
+  `session_id` do pai (visto em sessão `--bg` e em sessão interativa). O transcript do teammate começa com o
+  `custom-title` (e o `agent-name`) do **pai**: se um dia payload de teammate passar pelo mapper, a leitura de título
+  (§6.2.3) daria a ele o nome do pai.
+- **A ligação exata filho→pai existe**: o `--parent-session-id <sessionId do pai>` na linha de comando do processo do
+  teammate (junto de `--agent-name`). Hooks e inventário não a trazem.
+- Decisão (revisão de 07/10): teammate continua **sem thread própria** (§6.2.2) e aparece como `@nome` no painel e
+  nas linhas da thread do líder: é o "dentro desse chat" pedido. Não há thread `<pai> @<agente>`.
+- Trabalho futuro, não implementado: usar o `--parent-session-id` para corrigir o vínculo teammate→líder do
+  `TeamTracker`, que hoje parte do `leadSessionId` do `config.json` (que não bate com o pai) e cai nos fallbacks
+  (prefixo, último líder ativo). Exige ler a linha de comando de processos (`/proc/<pid>/cmdline` no Linux,
+  `Win32_Process.CommandLine` no Windows).
 
 ### 6.3 Segurança
 

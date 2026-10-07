@@ -82,6 +82,22 @@ describe("Inventory", () => {
     }
   });
 
+  it("enrich roda a cada poll: só o nome enriquecido mudar (um /rename) já emite changed", async () => {
+    let title = "CRM integração";
+    const inv = new Inventory({
+      run: () => Promise.resolve({ code: 0, stdout: windows, stderr: "" }),
+      enrich: (l) => l.map((s, i) => (i === 0 ? { ...s, name: title } : s)),
+    });
+    const seen: string[] = [];
+    inv.on("changed", (l: SessionInfo[]) => { seen.push(l[0]?.name ?? ""); });
+    await inv.poll();
+    await inv.poll();
+    title = "CRM-Onda5";
+    await inv.poll();
+    expect(seen).toEqual(["CRM integração", "CRM-Onda5"]);
+    expect(inv.current()[0]?.name).toBe("CRM-Onda5");
+  });
+
   it("waitFor rejeita no timeout", async () => {
     const inv = new Inventory({ pollMs: 10, run: () => Promise.resolve({ code: 0, stdout: windows, stderr: "" }) });
     inv.start();

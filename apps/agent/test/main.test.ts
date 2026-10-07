@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentEventSchema, newEnvelope, type AgentEvent, type RelayCommand, type SessionInfo } from "@global-agents/protocol";
@@ -8,6 +8,7 @@ import type { ExecResult } from "../src/claude/exec.js";
 import type { AgentConfig } from "../src/config.js";
 import { isTeammatePayload } from "../src/hooks/mapper.js";
 import { startHookServer, type HookServerOptions } from "../src/hooks/server.js";
+import { SessionNamer } from "../src/claude/titles.js";
 import { createAgent, type AgentDeps, type RelayClientLike } from "../src/main.js";
 import type { RelayClientEvents, RelayClientOptions } from "../src/transport/client.js";
 
@@ -65,6 +66,7 @@ async function setup(extra: Partial<AgentDeps> = {}, cfgOver: Partial<AgentConfi
     client: (opts) => (client = new FakeClient(opts)),
     hookServer: async (o: HookServerOptions) => { const s = await startHookServer(o); port = s.port; return s; },
     run: fakeRun,
+    namer: new SessionNamer({ projectsDir: join(dir, "projects") }),
     ...extra,
   });
   agent = a;
@@ -179,12 +181,86 @@ describe("createAgent", () => {
     expect(client.sent[3]).toMatchObject({ type: "session.status", sessionId: "s1", name: "corrige-bugs", state: "done" });
   });
 
-  it("sessão sem nome no inventário cai no nome do diretório", async () => {
+  it("sessão sem título e sem nome no inventário: status vai sem name (nada de nome de pasta)", async () => {
     const { client, inventory, post } = await setup();
     inventory.set([{ ...SESSION, name: "" }]);
     await post({ session_id: "s1", cwd: "/home/x/proj", hook_event_name: "SessionEnd" });
     await vi.waitFor(() => { expect(client.types()).toContain("session.status"); });
-    expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "proj" });
+    expect(client.sent.at(-1)).toMatchObject({ type: "session.status", sessionId: "s1" });
+    expect(client.sent.at(-1)).not.toHaveProperty("name");
+  });
+
+  it("hook: custom-title do transcript_path vence ai-title e o nome do inventário", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([{ ...SESSION, name: "gestai-8d" }]);
+    const t = join(dir, "t.jsonl");
+    writeFileSync(t, `${JSON.stringify({ type: "custom-title", customTitle: "CRM-Onda5", sessionId: "s1" })}\n${JSON.stringify({ type: "ai-title", aiTitle: "CRM integração", sessionId: "s1" })}\n`);
+    await post({ session_id: "s1", cwd: "/home/x/proj", transcript_path: t, hook_event_name: "SessionEnd" });
+    await vi.waitFor(() => { expect(client.types()).toContain("session.status"); });
+    expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "CRM-Onda5" });
+  });
+
+  it("sem título no transcript, o hook usa o nome do inventário", async () => {
+    const { client, inventory, post } = await setup();
+    inventory.set([{ ...SESSION, name: "gestai-8d" }]);
+    await post({ session_id: "s1", cwd: "/home/x/proj", transcript_path: join(dir, "nao-existe.jsonl"), hook_event_name: "SessionEnd" });
+    await vi.waitFor(() => { expect(client.types()).toContain("session.status"); });
+    expect(client.sent.at(-1)).toMatchObject({ type: "session.status", name: "gestai-8d" });
+  });
+
+  it("agente reiniciado (sem hook ainda) e cwd do inventário fora da pasta do transcript: session.list já traz o título", async () => {
+    const projects = join(dir, "projects");
+    mkdirSync(join(projects, "-home-x-worktree"), { recursive: true });
+    writeFileSync(join(projects, "-home-x-worktree", "s1.jsonl"), `${JSON.stringify({ type: "ai-title", aiTitle: "CRM integração", sessionId: "s1" })}\n`);
+    const row = { cwd: "/home/x/proj", kind: "interactive", sessionId: "s1", name: "proj-8d", status: "idle", pid: 10 };
+    const run = (args: string[]): Promise<ExecResult> =>
+      args[0] === "agents" ? Promise.resolve({ code: 0, stdout: JSON.stringify([row]), stderr: "" }) : fakeRun(args);
+    let client: FakeClient | undefined;
+    const a = createAgent(
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], devRoots: [], port: 0, claudeBin: "claude", dataDir: dir },
+      { client: (opts) => (client = new FakeClient(opts)), run, namer: new SessionNamer({ projectsDir: projects }) },
+    );
+    agent = a;
+    await a.start();
+    await vi.waitFor(() => { expect(client?.types()).toContain("session.list"); });
+    expect(client?.sent.find((e) => e.type === "session.list")).toMatchObject({ sessions: [{ sessionId: "s1", name: "CRM integração" }] });
+  });
+
+  it("session.list e hook mandam o mesmo nome (sem oscilação); /rename chega no próximo poll", async () => {
+    const projects = join(dir, "projects");
+    const cwd = "/home/x/proj";
+    const tdir = join(projects, "-home-x-proj");
+    mkdirSync(tdir, { recursive: true });
+    const t = join(tdir, "s1.jsonl");
+    writeFileSync(t, `${JSON.stringify({ type: "ai-title", aiTitle: "CRM integração", sessionId: "s1" })}\n`);
+    const row = { cwd, kind: "interactive", sessionId: "s1", name: "proj-8d", status: "idle", pid: 10 };
+    const run = (args: string[]): Promise<ExecResult> =>
+      args[0] === "agents" ? Promise.resolve({ code: 0, stdout: JSON.stringify([row]), stderr: "" }) : fakeRun(args);
+    let client: FakeClient | undefined;
+    let port = 0;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const a = createAgent(
+      { relayUrl: "ws://127.0.0.1:1/ws", token: "segredo", machineName: "fedora", projects: [], devRoots: [], port: 0, claudeBin: "claude", dataDir: dir },
+      {
+        client: (opts) => (client = new FakeClient(opts)), run,
+        hookServer: async (o: HookServerOptions) => { const s = await startHookServer(o); port = s.port; return s; },
+        namer: new SessionNamer({ projectsDir: projects }),
+      },
+    );
+    agent = a;
+    await a.start();
+    const c = client as FakeClient | undefined;
+    if (c === undefined) throw new Error("cliente não criado");
+    await vi.waitFor(() => { expect(c.types()).toContain("session.list"); });
+    expect(c.sent.find((e) => e.type === "session.list")).toMatchObject({ sessions: [{ sessionId: "s1", name: "CRM integração" }] });
+    await fetch(`http://127.0.0.1:${port}/hook`, { method: "POST", body: JSON.stringify({ session_id: "s1", cwd: "/home/x/proj/sub", transcript_path: t, hook_event_name: "Notification", message: "oi" }) });
+    await vi.waitFor(() => { expect(c.types()).toContain("session.status"); });
+    expect(c.sent.find((e) => e.type === "session.status")).toMatchObject({ name: "CRM integração" });
+
+    writeFileSync(t, `${JSON.stringify({ type: "custom-title", customTitle: "CRM-Onda5", sessionId: "s1" })}\n`, { flag: "a" });
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(() => { expect(c.sent.filter((e) => e.type === "session.list")).toHaveLength(2); });
+    expect(c.sent.filter((e) => e.type === "session.list").at(-1)).toMatchObject({ sessions: [{ name: "CRM-Onda5" }] });
   });
 
   it("Stop de teammate (agent_type, sessão fora do inventário) é descartado", async () => {

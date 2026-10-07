@@ -33,6 +33,8 @@ const QUEUE_FAILED_TEXT = "❌ não foi possível enfileirar o pedido; tente de 
 const NO_SESSION_ID_TEXT = "❌ a máquina não devolveu o id da sessão";
 const CONTENT_MAX = 2000;
 const EMBED_DESCRIPTION_MAX = 4096;
+/** `/sessoes`: sessão sem thread (a thread só nasce no primeiro prompt, resposta, notificação ou permissão). */
+export const NO_ACTIVITY_TEXT = "sem atividade ainda";
 /** Limites do Discord: 25 sugestões de autocomplete e 25 sessões no `/sessoes`; valor de sugestão ≤ 100. */
 const LIST_MAX = 25;
 const CHOICE_MAX = 100;
@@ -450,7 +452,7 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     const lines = shown.map((s) => {
       const emoji = STATE_EMOJI[parseState(s.state) ?? "done"];
       const name = escapeMd(s.name ?? `sessão ${s.sessionId.slice(0, 8)}`);
-      const link = s.threadId === null ? "" : ` · <#${s.threadId}>`;
+      const link = s.threadId === null ? ` · ${NO_ACTIVITY_TEXT}` : ` · <#${s.threadId}>`;
       const attach = s.bgId === null ? "" : ` · \`claude attach ${s.bgId}\``;
       return `${emoji} **${name}**${link}\n\`${s.cwd ?? "—"}\` · ${ago(s.updatedAt, now)}${attach}`;
     });

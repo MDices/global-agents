@@ -116,26 +116,107 @@ describe("sessões e threads", () => {
     await settle();
   });
 
-  it("session.list com 2 sessões cria 2 threads (sem filtro de conta)", async () => {
+  /** Thread já existente (como a do ack do `/novo` ou de uma atividade anterior). */
+  const withThread = async (sessionId: string, name: string): Promise<void> => {
+    await threads.ensureThread(M, { sessionId, name, cwd: "~/dev/work/gestai" });
+    await settle();
+  };
+
+  it("session.list sozinho não cria thread: só grava as sessões (alimenta o /sessoes)", async () => {
     emit(ev("session.list", { sessions: [
       info("s1", "correcoes-bugs", { status: "busy" }),
       info("s2", "deploy-homolog", { kind: "background", bgId: "7f3c2a91", state: "blocked" }),
     ] }));
     await settle();
-    expect(port.of("createThread")).toEqual([
-      { op: "createThread", channelId: "ch-1", name: "🟢 correcoes-bugs" },
-      { op: "createThread", channelId: "ch-1", name: "🟡 deploy-homolog" },
-    ]);
+    expect(port.of("createThread")).toEqual([]);
+    expect(port.of("postEmbed")).toEqual([]);
+    expect(db.sessions.listByMachine(M).map((r) => [r.sessionId, r.name, r.state, r.bgId, r.threadId])).toEqual(
+      expect.arrayContaining([["s1", "correcoes-bugs", "working", null, null], ["s2", "deploy-homolog", "waiting", "7f3c2a91", null]]),
+    );
+  });
+
+  it("o primeiro evento de atividade cria a thread com nome, estado e bgId do session.list", async () => {
+    emit(ev("session.list", { sessions: [
+      info("s1", "correcoes-bugs", { status: "busy" }),
+      info("s2", "deploy-homolog", { kind: "background", bgId: "7f3c2a91", state: "blocked" }),
+    ] }));
+    emit(ev("turn.reply", { sessionId: "s2", text: "pronto" }));
+    await settle();
+    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: "ch-1", name: "🟡 deploy-homolog" }]);
     const embeds = port.of("postEmbed");
-    expect(embeds).toHaveLength(2);
-    expect(embeds[1]?.embed.fields).toContainEqual({ name: "Abrir no terminal", value: "`claude attach 7f3c2a91`", inline: false });
-    expect(embeds[0]?.embed.fields?.some((f) => f.name === "Abrir no terminal")).toBe(false);
-    expect(db.sessions.listByMachine(M)).toHaveLength(2);
+    expect(embeds).toHaveLength(1);
+    expect(embeds[0]?.embed.fields).toContainEqual({ name: "Abrir no terminal", value: "`claude attach 7f3c2a91`", inline: false });
+    expect(postsTo(threadOf("s2"))).toEqual(["pronto"]);
+  });
+
+  it.each([
+    ["working", "🟢"],
+    ["waiting", "🟡"],
+  ] as const)("session.status %s (prompt ou notificação) é atividade e cria a thread", async (state, emoji) => {
+    emit(ev("session.list", { sessions: [info("s1", "CRM-Onda5")] }));
+    emit(ev("session.status", { sessionId: "s1", name: "CRM-Onda5", cwd: "~/dev/work/gestai", state }));
+    await settle();
+    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: "ch-1", name: `${emoji} CRM-Onda5` }]);
+  });
+
+  it("session.status done (SessionEnd de sessão nunca usada) não cria thread", async () => {
+    emit(ev("session.list", { sessions: [info("s1", "gestai-96")] }));
+    emit(ev("session.status", { sessionId: "s1", name: "gestai-96", cwd: "~/dev/work/gestai", state: "done" }));
+    await settle();
+    expect(port.of("createThread")).toEqual([]);
+    expect(db.sessions.get("s1")).toMatchObject({ state: "done", threadId: null });
+  });
+
+  it("depois de um restart do relay, o session.list renomeia a thread que só está no banco", async () => {
+    await withThread("s1", "gestai-8d");
+    router.dispose();
+    threads.dispose();
+    port.calls.length = 0;
+    threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log });
+    router = createRouter({ db, port, threads, hub, log });
+    emit(ev("session.list", { sessions: [info("s1", "CRM integração com GestAI Hub")] }));
+    await settle();
+    expect(port.of("createThread")).toEqual([]);
+    expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId: threadOf("s1"), name: "⚪ CRM integração com GestAI Hub" }]);
+  });
+
+  it.each(["done", "working"] as const)("depois de um restart do relay, session.status %s atualiza a thread que só está no banco, sem criar outra", async (state) => {
+    await withThread("s1", "CRM-Onda5");
+    const threadId = threadOf("s1");
+    router.dispose();
+    threads.dispose();
+    port.calls.length = 0;
+    threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log });
+    router = createRouter({ db, port, threads, hub, log });
+    db.sessions.upsert({ sessionId: "s1", machine: M, state: "waiting", updatedAt: Date.now() }); // banco: 🟡
+    emit(ev("session.status", { sessionId: "s1", cwd: "~/dev/work/gestai", state }));
+    await settle();
+    expect(port.of("createThread")).toEqual([]);
+    expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId, name: `${state === "done" ? "⚪" : "🟢"} CRM-Onda5` }]);
+    expect(db.sessions.get("s1")).toMatchObject({ threadId, name: "CRM-Onda5", state });
+  });
+
+  it("session.status sem name mantém o nome conhecido (não oscila para o nome da pasta)", async () => {
+    emit(ev("session.list", { sessions: [info("s1", "CRM-Onda5")] }));
+    emit(ev("session.status", { sessionId: "s1", cwd: "~/dev/work/gestai", state: "working" }));
+    await settle();
+    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: "ch-1", name: "🟢 CRM-Onda5" }]);
+    emit(ev("session.status", { sessionId: "s1", cwd: "~/dev/work/gestai", state: "waiting" }));
+    await settle();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId: threadOf("s1"), name: "🟡 CRM-Onda5" }]);
+    expect(db.sessions.get("s1")?.name).toBe("CRM-Onda5");
+  });
+
+  it("session.status sem name de sessão desconhecida cria a thread com o nome da pasta (Linux e Windows)", async () => {
+    emit(ev("session.status", { sessionId: "s1", cwd: "/home/leonardo/dev/work/gestai", state: "working" }));
+    emit(ev("session.status", { sessionId: "s2", cwd: "C:\\Users\\Leo\\dev\\gestai-hub", state: "working" }));
+    await settle();
+    expect(port.of("createThread").map((c) => c.name)).toEqual(["🟢 gestai", "🟢 gestai-hub"]);
   });
 
   it("session.list com nome alterado renomeia a thread e não cria outra", async () => {
-    emit(ev("session.list", { sessions: [info("s1", "correcoes-bugs")] }));
-    await settle();
+    await withThread("s1", "correcoes-bugs");
     emit(ev("session.list", { sessions: [info("s1", "bugs-faturamento")] }));
     await settle();
     expect(port.of("createThread")).toHaveLength(1);
@@ -144,8 +225,7 @@ describe("sessões e threads", () => {
   });
 
   it("session.status renomeia com o emoji do estado", async () => {
-    emit(ev("session.list", { sessions: [info("s1", "correcoes-bugs")] }));
-    await settle();
+    await withThread("s1", "correcoes-bugs");
     emit(ev("session.status", { sessionId: "s1", name: "correcoes-bugs", cwd: "~/dev/work/gestai", state: "working" }));
     await settle();
     expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId: threadOf("s1"), name: "🟢 correcoes-bugs" }]);
@@ -237,8 +317,7 @@ describe("sessões e threads", () => {
   });
 
   it("agent.warning vai para a thread da sessão; sem thread, para o canal da máquina", async () => {
-    emit(ev("session.list", { sessions: [info("s1", "correcoes-bugs")] }));
-    await settle();
+    await withThread("s1", "correcoes-bugs");
     emit(ev("agent.warning", { message: "Formato do inbox mudou", sessionId: "s1" }));
     emit(ev("agent.warning", { message: "sem sessão" }));
     emit(ev("agent.warning", { message: "sessão sem thread", sessionId: "s-x" }));
@@ -352,7 +431,8 @@ describe("times de agentes (thread do líder)", () => {
     emit(update([{ name: "alpha", state: "working" }]));
     emit(ev("team.event", { leadSessionId: "s1", kind: "teammate_permission" }));
     await settle();
-    expect(postsTo(threadOf("s1"))).toEqual([]);
+    expect(port.of("createThread")).toEqual([]);
+    expect(port.of("post")).toEqual([]);
     expect(port.of("pin")).toEqual([]);
   });
 });
@@ -399,7 +479,7 @@ describe("dono da sessão (spoofing entre máquinas)", () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(db.sessions.get("sb")).toMatchObject({ machine: B, name: "sessao-de-b" });
     expect(db.sessions.get("sa")?.machine).toBe(M);
-    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: "ch-1", name: "⚪ minha" }]);
+    expect(port.of("createThread")).toEqual([]);
     expect(port.of("renameThread")).toHaveLength(0);
   });
 
