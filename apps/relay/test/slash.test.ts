@@ -474,6 +474,18 @@ describe("/novo com pastas dev", () => {
     expect(spy).toHaveBeenCalledWith(M, expect.objectContaining({ sessionId: "sess-9", cwd: `${ROOT}/work/app-novo` }));
   });
 
+  it("offline: criar e o caminho relativo sobrevivem à fila e ao reenvio", async () => {
+    await use(helloDev([], [ROOT]));
+    hub.online.delete(M);
+    const i = command("novo", { prompt: "oi", projeto: "app-novo", criar: true });
+    await slash.onInteraction(i);
+    await settle();
+    expect(hub.sent).toEqual([]);
+    hub.online.add(M);
+    await bridge.onMachineOnline(M);
+    expect(lastCmd()).toMatchObject({ type: "session.create", commandId: i.id, cwd: "app-novo", create: true });
+  });
+
   it("menção usa o mesmo padrão (primeira pasta dev) e nunca cria", async () => {
     await use(helloDev([], [ROOT]));
     await slash.onMention({ messageId: "msg-1", channelId: CH, authorId: ALLOWED, isBot: false, text: "roda os testes" });
