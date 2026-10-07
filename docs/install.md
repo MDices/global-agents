@@ -13,7 +13,19 @@ Arquitetura em uma linha: cada máquina roda um **agente** que conecta por WebSo
    - **Privileged Gateway Intents** → **Message Content Intent**: **ligado**.
 3. Aba **OAuth2 → URL Generator**:
    - Scopes: `bot` e `applications.commands`.
-   - Bot Permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Manage Threads, Manage Messages (para fixar mensagens), Read Message History, Add Reactions, Use Application Commands, Manage Channels (para criar a categoria e os canais das máquinas).
+   - Bot Permissions (nomes da interface em português entre parênteses):
+     - Manage Channels (Gerenciar canais): cria a categoria e os canais das máquinas e edita o tópico.
+     - View Channels (Ver canais).
+     - Send Messages (Enviar mensagens).
+     - Create Public Threads (Criar tópicos públicos).
+     - Send Messages in Threads (Enviar mensagens em tópicos).
+     - Pin Messages (Fixar mensagens): fixa a mensagem de abertura da thread.
+     - Manage Threads (Gerenciar tópicos): renomeia a thread com o emoji de estado.
+     - Embed Links (Inserir links): sem ela os embeds (cabeçalho da thread, cards de permissão) não aparecem.
+     - Read Message History (Ver histórico de mensagens).
+     - Add Reactions (Adicionar reações).
+     - Use Application Commands (Usar comandos de barra).
+   - Não marque Administrator, Manage Messages, Attach Files nem permissões de voz.
 4. Abra a URL gerada e convide o bot para o seu servidor.
 5. IDs (Discord → Configurações → Avançado → **Modo desenvolvedor** ligado):
    - ID do servidor: botão direito no ícone do servidor → **Copiar ID do servidor** (`DISCORD_GUILD_ID`).
