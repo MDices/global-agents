@@ -237,9 +237,9 @@ export function createRouter(deps: RouterDeps): Router {
   const onStatus = async (machine: string, e: EventOf<"session.status">): Promise<void> => {
     const threadId = await threads.ensureThread(machine, { sessionId: e.sessionId, name: e.name, cwd: e.cwd, state: e.state });
     threads.rename(e.sessionId, e.name);
-    // Sem `name`: o hook cai no nome da pasta quando o inventário ainda não conhece a sessão, e o cabeçalho voltaria
-    // a "CDT" depois do ack. O nome do cabeçalho vem do ack do `/novo` e do `session.list` (inventário).
-    threads.updateHeader(e.sessionId, { cwd: e.cwd });
+    // O cabeçalho da thread não recebe nada do hook: o `name` cai no nome da pasta quando o inventário ainda não
+    // conhece a sessão, e o `cwd` é o corrente (um `cd` o faria alternar com o do inventário). Nome, pasta e `bgId`
+    // vêm do ack do `/novo` e do `session.list`.
     threads.setState(threadId, e.state);
     db.sessions.upsert({ sessionId: e.sessionId, machine, name: e.name, cwd: e.cwd, state: e.state, updatedAt: Date.now() });
   };

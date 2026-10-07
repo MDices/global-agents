@@ -21,6 +21,7 @@ export const NO_PROJECTS_TEXT = "esta máquina não informou projetos; rode glob
 export { noDevRootText };
 const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar nova_pasta";
 export const BOTH_FOLDERS_TEXT = "use projeto (pasta existente) ou nova_pasta (pasta a criar), não os dois";
+export const NOVA_PASTA_NAME_ONLY_TEXT = "nova_pasta é só o nome da pasta, criada dentro da pasta dev (ex.: meu-app)";
 export const OFFLINE_TEXT = "máquina offline; o pedido fica na fila por 1 h";
 export const CREATING_TEXT = "criando sessão…";
 /** Validade dos botões de confirmação do `/parar`. */
@@ -354,6 +355,7 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
       cwd = typed === "" ? first : typed;
       if (!projects.includes(cwd)) return { error: `projeto desconhecido nesta máquina: ${cwd}; escolha um dos sugeridos` };
     } else if (criar) {
+      if (/^(\/|\\|~|[A-Za-z]:)/.test(created)) return { error: NOVA_PASTA_NAME_ONLY_TEXT };
       if (!validProject(created)) return { error: `nova_pasta inválida: use uma linha só, sem caracteres de controle, até ${PROJECT_MAX} caracteres` };
       cwd = created;
     } else if (typed === "") {

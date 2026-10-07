@@ -322,6 +322,22 @@ describe("/novo", () => {
     expect(port.of("editCard")).toHaveLength(1);
   });
 
+  it("status alternando cwd contra o session.list não edita o cabeçalho", async () => {
+    hub.emit("event", M, ev("session.status", { sessionId: "sess-c", name: "p", cwd: "/d/p", state: "working" }));
+    await router.idle();
+    hub.emit("event", M, ev("session.list", { sessions: [{ sessionId: "sess-c", name: "p", cwd: "/d/p", kind: "background", bgId: "bg-c", state: "working" }] }));
+    await router.idle();
+    await settle();
+    const before = port.of("editCard").length; // só a edição do bgId, vinda do session.list
+    expect(before).toBe(1);
+    for (const cwd of ["/d/p/sub", "/d/p", "/d/p/sub", "/d/p"]) {
+      hub.emit("event", M, ev("session.status", { sessionId: "sess-c", name: "sub", cwd, state: "waiting" }));
+      await router.idle();
+    }
+    await settle();
+    expect(port.of("editCard")).toHaveLength(before);
+  });
+
   it("ack sem sessionId → erro na resposta", async () => {
     const i = command("novo", { prompt: "oi" });
     await slash.onInteraction(i);
@@ -477,6 +493,17 @@ describe("/novo com pastas dev", () => {
       await slash.onInteraction(i);
       await settle();
       expect(i.replies[0]?.view.content).toContain("nova_pasta inválida");
+    }
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("nova_pasta absoluta ou com ~ → recusada no relay, só o nome vale", async () => {
+    await use(helloDev([], [ROOT]));
+    for (const nova_pasta of ["/tmp/x", "~/x", "C:\\x", "\\\\srv\\x"]) {
+      const i = command("novo", { prompt: "oi", nova_pasta });
+      await slash.onInteraction(i);
+      await settle();
+      expect(i.replies[0]?.view.content).toBe("nova_pasta é só o nome da pasta, criada dentro da pasta dev (ex.: meu-app)");
     }
     expect(hub.sent).toEqual([]);
   });

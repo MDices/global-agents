@@ -265,19 +265,60 @@ describe("ThreadRegistry.updateHeader", () => {
     expect(edits[0]?.card.embed.fields).toContainEqual({ name: "Conta", value: "leonardo@exemplo.com.br", inline: true });
   });
 
-  it("conteúdo igual ao já mostrado não edita; só uma chamada em voo por vez, o último valor vence", async () => {
+  it("conteúdo igual ao já mostrado não edita", async () => {
     await reg.ensureThread(M, { ...S, bgId: "b1" });
     reg.updateHeader("s1", { name: S.name, cwd: S.cwd, bgId: "b1" });
     await flush();
     expect(port.of("editCard")).toHaveLength(0);
+  });
+
+  it("ack durante o postEmbed em voo: a edição espera o post e usa o messageId dele", async () => {
+    let release: (v: { messageId: string }) => void = () => {};
+    port.postEmbed = (targetId, embed) => {
+      port.calls.push({ op: "postEmbed", targetId, embed });
+      return new Promise((res) => { release = res; });
+    };
+    const ensuring = reg.ensureThread(M, S);
+    await flush();
+    // a thread já está registrada (createThread resolveu) e o post ainda está em voo
+    reg.updateHeader("s1", { bgId: "b9" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(0);
+    release({ messageId: "msg-post" });
+    await ensuring;
+    await flush();
+    const edits = port.of("editCard");
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.messageId).toBe("msg-post");
+    expect(db.sessions.get("s1")?.headerMessageId).toBe("msg-post");
+  });
+
+  it("duas atualizações durante um editCard pendente: sem paralelismo, sobra uma edição com o valor final", async () => {
+    await reg.ensureThread(M, S);
+    const releases: (() => void)[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    port.editCard = async (threadId, messageId, card) => {
+      port.calls.push({ op: "editCard", threadId, messageId, card });
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((res) => { releases.push(res); });
+      inFlight--;
+    };
     reg.updateHeader("s1", { name: "um" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(1);
     reg.updateHeader("s1", { name: "dois" });
+    reg.updateHeader("s1", { name: "tres" });
+    await flush();
+    expect(port.of("editCard")).toHaveLength(1); // a segunda espera a primeira terminar
+    releases[0]?.();
     await flush();
     const titles = port.of("editCard").map((c) => c.card.embed.title);
-    expect(titles.at(-1)).toBe("Sessão dois");
-    reg.updateHeader("s1", { name: "dois" });
+    expect(titles).toEqual(["Sessão um", "Sessão tres"]); // "dois" foi coalescido
+    releases[1]?.();
     await flush();
-    expect(port.of("editCard").map((c) => c.card.embed.title)).toEqual(titles);
+    expect(maxInFlight).toBe(1);
   });
 
   it("sessão sem thread conhecida é ignorada (nunca cria thread)", async () => {

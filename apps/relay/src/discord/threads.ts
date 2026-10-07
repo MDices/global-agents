@@ -293,6 +293,8 @@ export class ThreadRegistry {
     row: { name: string | null; cwd: string | null; bgId: string | null; headerMessageId: string | null; machine?: string },
     account: string | null = row.machine === undefined ? null : this.db.machines.getByName(row.machine)?.claudeAccount ?? null,
   ): void {
+    // Limitação aceita: a chave aplicada é semeada com o que o banco tem, supondo o cabeçalho em dia. Se o relay cair
+    // entre o ack (que grava o `bgId`) e a edição, a thread reencontrada não é reparada.
     const header: HeaderState = {
       name: row.name ?? name, account, chain: Promise.resolve(),
       ...(row.cwd !== null ? { cwd: row.cwd } : {}),
