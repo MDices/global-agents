@@ -180,6 +180,22 @@ describe("sessões e threads", () => {
     expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId: threadOf("s1"), name: "⚪ CRM integração com GestAI Hub" }]);
   });
 
+  it.each(["done", "working"] as const)("depois de um restart do relay, session.status %s atualiza a thread que só está no banco, sem criar outra", async (state) => {
+    await withThread("s1", "CRM-Onda5");
+    const threadId = threadOf("s1");
+    router.dispose();
+    threads.dispose();
+    port.calls.length = 0;
+    threads = new ThreadRegistry({ db, port, channelFor: machineChannelResolver(db, port), log });
+    router = createRouter({ db, port, threads, hub, log });
+    db.sessions.upsert({ sessionId: "s1", machine: M, state: "waiting", updatedAt: Date.now() }); // banco: 🟡
+    emit(ev("session.status", { sessionId: "s1", cwd: "~/dev/work/gestai", state }));
+    await settle();
+    expect(port.of("createThread")).toEqual([]);
+    expect(port.of("renameThread")).toEqual([{ op: "renameThread", threadId, name: `${state === "done" ? "⚪" : "🟢"} CRM-Onda5` }]);
+    expect(db.sessions.get("s1")).toMatchObject({ threadId, name: "CRM-Onda5", state });
+  });
+
   it("session.status sem name mantém o nome conhecido (não oscila para o nome da pasta)", async () => {
     emit(ev("session.list", { sessions: [info("s1", "CRM-Onda5")] }));
     emit(ev("session.status", { sessionId: "s1", cwd: "~/dev/work/gestai", state: "working" }));
