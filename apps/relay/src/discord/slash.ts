@@ -3,7 +3,7 @@ import {
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
 import {
-  newEnvelope, PermissionModeSchema, SLASH_ALLOWLIST, SlashCommandNameSchema, type PermissionMode, type RelayCommand,
+  newEnvelope, noDevRootText, PermissionModeSchema, SLASH_ALLOWLIST, SlashCommandNameSchema, type PermissionMode, type RelayCommand,
 } from "@global-agents/protocol";
 import { z } from "zod";
 import type { CommandBridge, CommandCallbacks, SubmitResult } from "../commands.js";
@@ -17,12 +17,8 @@ export const NOT_ALLOWED_TEXT = "sem permissão";
 export const NOT_MACHINE_CHANNEL_TEXT = "use este comando no canal de uma máquina";
 export const NOT_SESSION_THREAD_TEXT = "use este comando dentro da thread de uma sessão";
 export const NO_PROJECTS_TEXT = "esta máquina não informou projetos; rode global-agents install --project <pasta>";
-/** Sem pasta dev: o comando certo para o sistema da máquina (o `os` do último hello; Linux quando desconhecido). */
-export function noDevRootText(os: string | null): string {
-  return os === "win32"
-    ? "esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`"
-    : "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`";
-}
+/** Reexportado para quem já importava daqui; o texto mora no protocolo (o agente usa o mesmo). */
+export { noDevRootText };
 const LEGACY_CREATE_TEXT = "o agente desta máquina é anterior às pastas dev e não cria pastas; atualize o agente para usar criar:true";
 export const OFFLINE_TEXT = "máquina offline; o pedido fica na fila por 1 h";
 export const CREATING_TEXT = "criando sessão…";
@@ -257,6 +253,24 @@ const CreatedSchema = z.object({ sessionId: z.string().min(1), bgId: z.string().
 
 /** Formato aceito para o `projeto` digitado: o relay só confere isto; quem decide a pasta é o agente. */
 const validProject = (p: string, max = PROJECT_MAX): boolean => p !== "" && p.length <= max && /^\P{Cc}*$/u.test(p);
+
+/** Caminho que o agente resolve sem raiz dev: absoluto (Linux, Windows, UNC) ou com `~`. */
+const looksAbsolute = (p: string): boolean => /^(\/|~|[A-Za-z]:[\\/]|\\\\)/.test(p);
+
+/**
+ * Valor de uma sugestão do autocomplete: o caminho absoluto, ou, se passar do limite do Discord (100), o caminho
+ * relativo à primeira raiz, que o agente resolve contra a mesma raiz. Fora da primeira raiz e longo demais: omitido.
+ */
+export function suggestionValue(p: string, firstRoot: string | undefined, windows: boolean): string | undefined {
+  if (p.length <= CHOICE_MAX) return p;
+  if (firstRoot === undefined) return undefined;
+  const sep = windows ? "\\" : "/";
+  const prefix = firstRoot.endsWith("/") || firstRoot.endsWith("\\") ? firstRoot : firstRoot + sep;
+  const inside = windows ? p.toLowerCase().startsWith(prefix.toLowerCase()) : p.startsWith(prefix);
+  if (!inside) return undefined;
+  const rel = p.slice(prefix.length);
+  return rel !== "" && rel.length <= CHOICE_MAX ? rel : undefined;
+}
 
 /** Onde mostrar o andamento de um pedido: edição da resposta efêmera, ou reply à mensagem da menção. */
 type Show = (text: string) => void;
@@ -575,16 +589,21 @@ export function createSlashHandler(deps: SlashDeps): SlashHandler {
     }
     const typed = a.focused.value.trim();
     const needle = typed.toLowerCase();
+    const windows = machine.os === "win32";
     const roots = deps.router.devRootsOf(machine.name);
     const all = [...new Set([
       ...deps.router.projectsOf(machine.name), ...(roots ?? []), ...deps.router.discoveredOf(machine.name),
-    ])].filter((p) => p.length <= CHOICE_MAX);
-    const matches = all.filter((p) => p.toLowerCase().includes(needle));
-    // Texto livre (pasta nova ou relativa) só vale para agente com pastas dev; ele vai primeiro quando não é
-    // exatamente uma das sugestões.
+    ])];
+    const values = [...new Set(all.filter((p) => p.toLowerCase().includes(needle))
+      .map((p) => suggestionValue(p, roots?.[0], windows))
+      .filter((v): v is string => v !== undefined))];
+    // Texto livre (pasta nova ou relativa) só vale para agente com pastas dev: vai primeiro quando não é exatamente uma
+    // das sugestões (no Linux `Gestai` e `gestai` são pastas diferentes; no Windows, não). Sem raiz, só caminho
+    // absoluto faz sentido (relativo o agente sempre recusa).
+    const same = (x: string): boolean => (windows ? x.toLowerCase() === needle : x === typed);
     const echo = roots !== undefined && typed !== "" && validProject(typed, CHOICE_MAX)
-      && !all.some((p) => p.toLowerCase() === needle);
-    respond([...(echo ? [typed] : []), ...matches].slice(0, LIST_MAX).map((p) => ({ name: p, value: p })));
+      && (roots.length > 0 || looksAbsolute(typed)) && !all.some(same) && !values.some(same);
+    respond([...(echo ? [typed] : []), ...values].slice(0, LIST_MAX).map((p) => ({ name: p, value: p })));
   };
 
   const onInteraction = (i: SlashInteraction): void => {

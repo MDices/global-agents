@@ -441,7 +441,8 @@ describe("/novo com pastas dev", () => {
     await slash.onInteraction(i);
     await settle();
     expect(hub.sent).toEqual([]);
-    expect(i.replies).toEqual([{ view: { content: "esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev`" }, ephemeral: true }]);
+    expect(i.replies).toEqual([{ view: { content: noDevRootText("linux") }, ephemeral: true }]);
+    expect(i.replies[0]?.view.content).toContain("systemctl --user restart global-agents");
   });
 
   it("máquina Windows sem pasta dev → erro com o comando do instalador PowerShell", async () => {
@@ -449,9 +450,9 @@ describe("/novo com pastas dev", () => {
     const i = command("novo", { prompt: "oi" });
     await slash.onInteraction(i);
     await settle();
-    expect(i.replies[0]?.view.content).toBe("esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
+    expect(i.replies[0]?.view.content).toContain("`.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev`");
     expect(noDevRootText("win32")).toBe(i.replies[0]?.view.content);
-    expect(noDevRootText("darwin")).toBe(noDevRootText("linux"));
+    expect(noDevRootText("darwin")).toContain("e reinicie o agente");
     expect(noDevRootText(null)).toBe(noDevRootText("linux"));
   });
 
@@ -545,6 +546,47 @@ describe("/novo com pastas dev", () => {
       expect(a.choices[0]?.[0]).toEqual({ name: "p", value: "p" });
       expect(a.choices[0]?.every((c) => c.value.length <= 100)).toBe(true);
       expect(longo.choices).toEqual([[]]);
+    });
+
+    it("eco diferencia maiúsculas no Linux e não no Windows", async () => {
+      await use(helloDev([], [ROOT]), projectsEv([ROOT], [`${ROOT}/gestai`]));
+      const linux = autocomplete("Gestai");
+      await slash.onInteraction(linux);
+      await settle();
+      expect(linux.choices[0]?.[0]).toEqual({ name: "Gestai", value: "Gestai" });
+      const W = "C:\\Users\\Leo\\Dev";
+      await use(ev("agent.hello", { version: "0.2.0", os: "win32", osUser: "leo", claudeAccount: ACCOUNT, projects: [], devRoots: [W] }),
+        projectsEv([W], [`${W}\\Gestai`]));
+      const win = autocomplete(`${W.toLowerCase()}\\gestai`);
+      await slash.onInteraction(win);
+      await settle();
+      expect(win.choices).toEqual([[{ name: `${W}\\Gestai`, value: `${W}\\Gestai` }]]);
+    });
+
+    it("sugestão absoluta com mais de 100 caracteres vira relativa à primeira raiz; fora dela, some", async () => {
+      const deep = `${ROOT}/${"a".repeat(45)}/${"b".repeat(45)}`; // 110 absoluto, 91 relativo
+      const outsideLong = `/srv/${"c".repeat(120)}`;
+      await use(helloDev([outsideLong], [ROOT]), projectsEv([ROOT], [deep]));
+      const a = autocomplete("bbbb");
+      await slash.onInteraction(a);
+      await settle();
+      const rel = `${"a".repeat(45)}/${"b".repeat(45)}`;
+      expect(a.choices).toEqual([[{ name: "bbbb", value: "bbbb" }, { name: rel, value: rel }]]);
+      const c = autocomplete("cccc");
+      await slash.onInteraction(c);
+      await settle();
+      expect(c.choices[0]?.map((x) => x.value)).toEqual(["cccc"]); // só o eco; a sugestão longa fora da raiz some
+    });
+
+    it("agente novo sem raiz: não ecoa relativo (o agente recusaria), mas ecoa absoluto", async () => {
+      await use(helloDev(["/opt/legado"], []));
+      const rel = autocomplete("app-novo");
+      await slash.onInteraction(rel);
+      const abs = autocomplete("/opt/outro");
+      await slash.onInteraction(abs);
+      await settle();
+      expect(rel.choices).toEqual([[]]);
+      expect(abs.choices[0]?.[0]).toEqual({ name: "/opt/outro", value: "/opt/outro" });
     });
 
     it("agente antigo não ecoa o texto digitado (só aceita os projetos do hello)", async () => {
