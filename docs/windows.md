@@ -66,7 +66,9 @@ A config em `~/.global-agents` é mantida. `crossSessionInbound` em `~/.claude/s
 ## Solução de problemas
 
 - **Config nova não pega / o relay mostra o contato antigo** (versão, pastas dev, projetos): sobrou um `node.exe` antigo do agente, ainda conectado com a config velha, segurando a porta local dos hooks; o agente novo falha com `EADDRINUSE` e sai. Liste com o comando de diagnóstico acima (confira o `CreationDate`), encerre com `Stop-Process -Id <ProcessId> -Force` e rode `schtasks /Run /TN global-agents`. Rodar de novo o `install-windows.ps1` já faz isso.
-- O erro de porta ocupada aparece como `a porta 48476 (127.0.0.1) dos hooks já está em uso…` ao rodar `node apps\agent\dist\cli.js run` num terminal.
+- **O agente sumiu / não sobe e não aparece erro:** a tarefa roda sem console; os erros fatais de inicialização (porta ocupada, config inválida) e a linha `agente iniciado` (versão e PID) ficam em `%USERPROFILE%\.global-agents\agent.log` (256 KB; passou disso vira `agent.log.1`). `node apps\agent\dist\cli.js status` mostra o último erro dele quando o agente não está rodando. Porta ocupada aparece como `a porta 48476 (127.0.0.1) dos hooks já está em uso…`.
+- **O `install-windows.ps1` parou com `ERRO: o(s) node(s) PID …`:** o node antigo não encerrou em 5 s (por exemplo, foi iniciado como administrador). Rode o `Stop-Process -Id <PID> -Force` indicado num PowerShell elevado e execute o script de novo.
+- O `Stop-Process` do comando de porta ocupada encerra o node de **qualquer** instalação do global-agents nesta máquina, não só desta.
 
 ## Checklist de validação manual (Toneli-PC)
 
