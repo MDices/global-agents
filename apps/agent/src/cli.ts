@@ -5,10 +5,11 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG_PATH, installConfig, InstallUsageError, loadConfig, normalizeDir, saveConfig } from "./config.js";
+import { appendAgentLog, AGENT_LOG, lastErrorLine } from "./agent-log.js";
 import { defaultDeps, runDoctor } from "./doctor.js";
 import { installHooks, scriptCommandFor, uninstallHooks } from "./hooks/install.js";
 import { machineId } from "./machine.js";
-import { createAgent } from "./main.js";
+import { agentVersion, createAgent } from "./main.js";
 import { installUnit, uninstallUnit, unitPath } from "./service/systemd.js";
 import { resolveToken } from "./token.js";
 import { runWindowsService, serviceBackend, windowsUserId, type WindowsServiceRun } from "./service/windows.js";
@@ -77,12 +78,13 @@ function configPath(a: Args): string {
   return resolve(one(a, "--config") ?? DEFAULT_CONFIG_PATH);
 }
 
-function execFileAsync(file: string, args: string[]): Promise<void> {
+function execFileAsync(file: string, args: string[]): Promise<string> {
   return new Promise((res, rej) => {
     execFile(file, args, { windowsHide: true }, (err, stdout, stderr) => {
-      if (stdout.trim() !== "") console.log(stdout.trim());
+      // A saída do powershell.exe é interna (contagens/PIDs): o runWindowsService a interpreta e monta a mensagem.
+      if (stdout.trim() !== "" && file !== "powershell.exe") console.log(stdout.trim());
       if (err) rej(new Error(`${file} falhou: ${stderr.trim() || err.message}`));
-      else res();
+      else res(stdout);
     });
   });
 }
@@ -205,9 +207,17 @@ async function uninstall(a: Args): Promise<void> {
 }
 
 async function run(a: Args): Promise<void> {
-  const cfg = loadConfig(configPath(a));
+  let dataDir = dirname(configPath(a));
+  const fail = (e: unknown): never => {
+    // Windows: a tarefa é headless, então o stderr some; o agent.log é onde o erro de inicialização fica visível.
+    appendAgentLog(dataDir, "erro", `falha ao iniciar: ${e instanceof Error ? e.message : String(e)}`);
+    throw e;
+  };
+  const cfg = (() => { try { return loadConfig(configPath(a)); } catch (e) { return fail(e); } })();
+  dataDir = cfg.dataDir;
   const agent = createAgent(cfg);
-  await agent.start();
+  try { await agent.start(); } catch (e) { fail(e); }
+  appendAgentLog(dataDir, "info", `agente iniciado (versão ${agentVersion()}, PID ${process.pid})`);
   console.log(`agente ${machineId(cfg)} rodando; hooks em http://127.0.0.1:${cfg.port} e relay ${cfg.relayUrl}`);
   let stopping = false;
   const shutdown = (): void => {
@@ -242,6 +252,8 @@ async function status(a: Args): Promise<number> {
     // não está rodando
   }
   console.log("agente:      não está rodando");
+  const last = lastErrorLine(cfg.dataDir);
+  if (last !== undefined) console.log(`último erro: ${last}\n             (log completo: ${join(cfg.dataDir, AGENT_LOG)})`);
   return 1;
 }
 
