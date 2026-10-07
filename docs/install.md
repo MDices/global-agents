@@ -135,14 +135,18 @@ Cada `--dev-root <pasta>` é uma **pasta raiz de desenvolvimento**: tudo dentro 
 
 No `/novo`, `projeto` aceita uma sugestão, um caminho **relativo à primeira pasta dev** (ex.: `gestai`, `work/app-novo`, inclusive mais fundo do que a varredura alcança) ou um caminho absoluto. Quem decide é o agente: só abre sessão em pasta **dentro** de uma pasta dev (comparando o caminho real, então um symlink que sai da pasta dev é recusado) ou em um `--project` explícito. Pasta que ainda não existe só é criada com `criar:true` no `/novo`, e cada nome novo precisa começar com letra ou número e ter só letras, números, `.`, `_` e `-`. Sem `projeto`, o `/novo` abre a sessão na própria primeira pasta dev (mesmo havendo `--project`); sem pasta dev, no primeiro `--project`.
 
-Confiança do Claude Code: uma pasta nova sem git dentro de uma pasta dev já confiável herda a confiança dela. Quando o `claude --bg` recusa a pasta ("Workspace not trusted", por exemplo num repositório git que nunca foi aberto, ou numa pasta dev que nunca foi aberta), o agente marca essa pasta como confiável em `~/.claude.json` (`projects[<pasta>].hasTrustDialogAccepted`, o mesmo campo que o Claude Code grava ao aceitar o diálogo) e tenta uma vez mais. Isso só acontece para pastas dentro de uma pasta dev; fora delas a sessão falha com a instrução de abrir `claude` na pasta uma vez.
+Confiança do Claude Code: uma pasta nova sem git dentro de uma pasta dev já confiável herda a confiança dela. Quando o `claude --bg` recusa a pasta ("Workspace not trusted", por exemplo num repositório git que nunca foi aberto, ou numa pasta dev que nunca foi aberta), o agente marca essa pasta como confiável em `~/.claude.json` (`projects[<pasta>].hasTrustDialogAccepted`, o mesmo campo que o Claude Code grava ao aceitar o diálogo; no Windows com `/` no caminho, como o Claude Code lê) e tenta uma vez mais. A gravação usa a mesma trava do Claude Code (`~/.claude.json.lock`) e, se ela estiver ocupada por mais de 2 s, desiste e a sessão falha com a instrução. Isso só acontece para pastas dentro de uma pasta dev; fora delas a sessão falha com a instrução de abrir `claude` na pasta uma vez.
+
+> **Atenção: pasta dev = "tudo aqui é confiável para o Claude Code".** Qualquer pasta dentro de uma pasta dev pode ganhar a confiança do Claude Code automaticamente quando uma sessão é aberta nela pelo Discord, inclusive um repositório de terceiros clonado ali e nunca aberto. Confiar numa pasta libera o que ela traz: hooks em `.claude/settings.json`, servidores MCP de `.mcp.json` e afins passam a rodar sem o diálogo de confiança. Não use como pasta dev um lugar onde você clona código em que não confia; clone esse código fora das pastas dev.
 
 Para acrescentar ou trocar as pastas dev depois, não precisa do token nem do relay de novo: com a config já gravada, `--relay`, `--token` e `--fingerprint` são opcionais e o que não for passado fica como estava.
 ```bash
 node apps/agent/dist/cli.js install --dev-root ~/dev --dev-root ~/trabalho
 systemctl --user restart global-agents
 ```
-`--dev-root` e `--project` substituem a lista inteira correspondente (repita a pasta que já existia para mantê-la). `status` mostra a linha `raízes dev:`.
+`--dev-root` e `--project` substituem a lista inteira correspondente (repita a pasta que já existia para mantê-la); não passar nenhum `--dev-root` mantém a lista, e `--no-dev-root` apaga todas as raízes. O agente só lê a config ao subir, por isso o restart. `status` mostra a linha `raízes dev:`.
+
+No `/novo`, `projeto:~/dev/app` também funciona: `~` é o home do usuário do agente.
 
 O `--service` grava a unidade systemd de usuário e **imprime** os comandos para ativá-la (`install` sem `--service` só grava config e hooks; reinstalar mantém o que não foi passado).
 Rode os comandos `systemctl --user …` e `loginctl enable-linger …` que ele imprimir (o linger mantém o agente de pé sem sessão aberta). Sem `--service`, use `node apps/agent/dist/cli.js run` num terminal.
@@ -179,7 +183,7 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 | **Porta 8443 não responde de fora** | Confira `sudo iptables -L INPUT --line-numbers -n` (a regra deve vir antes do REJECT) e a security list da Oracle. |
 | **Rate limit do Discord** | O relay enfileira por canal e respeita o `Retry-After`; as mensagens só demoram. Nome de thread e tópico do canal mudam no máximo 1× a cada 5 min (300 s): o Discord só aceita ~2 edições por canal a cada 10 min, então o emoji de estado pode demorar a acompanhar. |
 | **Thread arquivada** | Nada a fazer: uma mensagem nova desarquiva a thread automaticamente. |
-| **`esta máquina não tem pasta dev`** no `/novo` | O agente foi instalado sem `--dev-root` nem `--project`. A mensagem traz o comando do sistema da máquina: no Linux `install --dev-root ~/dev` (sem token), no Windows `install-windows.ps1 -DevRoot C:\dev`. Depois reinicie o agente. |
+| **`esta máquina não tem pasta dev`** no `/novo` | O agente foi instalado sem `--dev-root` nem `--project`. A mensagem traz o comando do sistema da máquina: no Linux `global-agents install --dev-root ~/dev` (sem token) seguido de `systemctl --user restart global-agents`; no Windows `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`, que já reinicia o agente sozinho. |
 | **`pasta não existe; use criar:true…`** | A pasta pedida não existe; repita o `/novo` com `criar:true` (só funciona dentro de uma pasta dev). |
 | **`… está fora das pastas dev desta máquina`** | O caminho (ou o destino real de um symlink) fica fora de toda pasta dev e não é um `--project`. Use um caminho dentro de uma pasta dev ou acrescente a pasta com `install --dev-root`. |
 | **Injeção falhou** (❌ na mensagem) | A sessão morreu ou o socket sumiu; o relay sugere `/novo`. |

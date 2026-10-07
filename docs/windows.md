@@ -31,14 +31,15 @@ Não é preciso administrador: a tarefa é do seu usuário e roda com privilégi
 
 ## Pastas dev e `/novo`
 
-No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e repositórios git das pastas dev), um caminho relativo à primeira pasta dev (`gestai`, `work\app-novo`) ou um caminho absoluto. O agente só abre sessão dentro de uma pasta dev (comparando o caminho real, sem diferenciar maiúsculas) ou num `-Project`; pasta inexistente só é criada com `criar:true`. Sem `projeto`, a sessão abre na própria pasta dev. Sem pasta dev, o `/novo` responde com o comando `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`. Detalhes, inclusive a confiança do Claude Code em pastas novas, em [install.md](./install.md#pastas-dev---dev-root).
+No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e repositórios git das pastas dev), um caminho relativo à primeira pasta dev (`gestai`, `work\app-novo`) ou um caminho absoluto. O agente só abre sessão dentro de uma pasta dev (comparando o caminho real, sem diferenciar maiúsculas) ou num `-Project`; pasta inexistente só é criada com `criar:true`. Sem `projeto`, a sessão abre na própria pasta dev. Sem pasta dev, o `/novo` responde com o comando `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev`. `projeto:~\dev\app` também funciona (`~` é o seu perfil). Detalhes, inclusive a confiança do Claude Code em pastas novas, em [install.md](./install.md#pastas-dev---dev-root).
 
-Para acrescentar ou trocar as pastas dev depois, sem token e sem rodar o instalador inteiro (a config já gravada fornece relay, token e fingerprint):
+> **Atenção: pasta dev = "tudo aqui é confiável para o Claude Code".** Qualquer pasta dentro de uma pasta dev pode ganhar a confiança do Claude Code automaticamente quando uma sessão é aberta nela pelo Discord, inclusive um repositório de terceiros clonado ali e nunca aberto. Confiar numa pasta libera o que ela traz: hooks em `.claude/settings.json`, servidores MCP de `.mcp.json` e afins passam a rodar sem o diálogo de confiança. Não use como pasta dev um lugar onde você clona código em que não confia; clone esse código fora das pastas dev.
+
+Para acrescentar ou trocar as pastas dev depois, rode o próprio instalador só com `-DevRoot`. Com a config já gravada ele não pede token nem `-Relay`, pula `pnpm install` e o build (a não ser que falte o `dist`) e reinicia o agente sozinho:
 ```powershell
-node apps\agent\dist\cli.js install --dev-root C:\dev --dev-root D:\trabalho
-schtasks /End /TN global-agents; schtasks /Run /TN global-agents   # reinicia o agente com a lista nova
+.\deploy\agent\install-windows.ps1 -DevRoot C:\dev,D:\trabalho
 ```
-`--dev-root` substitui a lista inteira (repita as pastas que quer manter); `status` mostra a linha `raízes dev:`.
+O mesmo vale para `-Project`. Sem o script, dá para fazer à mão: `node apps\agent\dist\cli.js install --dev-root C:\dev` e depois `schtasks /End /TN global-agents; schtasks /Run /TN global-agents`. `-DevRoot`/`--dev-root` substitui a lista inteira (repita as pastas que quer manter); não passar nenhum mantém a lista, e `--no-dev-root` (na CLI) apaga todas. `status` mostra a linha `raízes dev:`.
 
 ## Verificar
 
