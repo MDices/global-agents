@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AgentEventSchema, type AgentEvent } from "./events.js";
 import { RelayCommandSchema, type RelayCommand } from "./commands.js";
-export * from "./envelope.js"; export * from "./events.js"; export * from "./commands.js";
+export * from "./envelope.js"; export * from "./events.js"; export * from "./commands.js"; export * from "./texts.js";
 export const PROTOCOL_VERSION = 1 as const;
 export const MessageSchema = z.union([AgentEventSchema, RelayCommandSchema]);
 export type Message = AgentEvent | RelayCommand;

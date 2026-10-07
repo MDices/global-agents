@@ -56,3 +56,14 @@ describe("comandos", () => {
     });
   });
 });
+
+describe("noDevRootText", () => {
+  it("comando por sistema, com como reiniciar o agente", async () => {
+    const { noDevRootText } = await import("../src/index.js");
+    expect(noDevRootText("linux")).toBe("esta máquina não tem pasta dev; rode `global-agents install --dev-root ~/dev` e reinicie o agente com `systemctl --user restart global-agents`");
+    expect(noDevRootText("win32")).toBe("esta máquina não tem pasta dev; rode `.\\deploy\\agent\\install-windows.ps1 -DevRoot C:\\dev` (o script grava a pasta e reinicia o agente sozinho)");
+    expect(noDevRootText("darwin")).toContain("e reinicie o agente");
+    expect(noDevRootText(null)).toBe(noDevRootText("linux"));
+    expect(noDevRootText(undefined)).toBe(noDevRootText("linux"));
+  });
+});
