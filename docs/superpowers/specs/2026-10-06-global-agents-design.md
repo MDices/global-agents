@@ -159,30 +159,35 @@ build (só `-SkipBuild` pula) e reinicia a tarefa; o fluxo de atualização é `
   botões `Permitir` / `Negar`; clique → `permission.decide`; `permission.resolved` edita o card com o desfecho.
 - Mensagem humana numa thread mapeada → `session.send` → reação ✅ no ack, ❌ no erro, ⏳ se máquina offline
   (comando vai para `pending_commands`, validade 1 h; ao expirar, edita a reação para ❌ e avisa).
-- `/novo prompt:<texto> projeto:<pasta> modo:<default|acceptEdits|plan|bypassPermissions> criar:<bool>` no canal →
+- `/novo prompt:<texto> projeto:<pasta> nova_pasta:<nome> modo:<default|acceptEdits|plan|bypassPermissions>` no canal →
   `session.create` → thread criada no `ack` (com o `cwd` absoluto devolvido pelo agente).
-  - `projeto`: uma sugestão do autocomplete (projetos explícitos + pastas dev + descobertos do `agent.projects`, filtrados
-    pelo texto, até 25; o texto digitado vai como primeira opção quando não é exatamente uma sugestão), um caminho
-    relativo à primeira pasta dev (`gestai`, `work/app-novo`) ou absoluto. O relay só confere formato (não vazio, sem
-    caractere de controle, até 1024); quem decide é o agente.
-  - Sem `projeto`: a própria primeira pasta dev (mesmo havendo projetos explícitos); senão o primeiro projeto
+  - `projeto` seleciona **só uma pasta existente**: uma sugestão do autocomplete (projetos explícitos + pastas dev +
+    descobertos do `agent.projects`, filtrados pelo texto, até 25; **sem eco** do texto digitado), um caminho
+    relativo à primeira pasta dev (`gestai`, `work/app-novo`) ou absoluto (o Discord ainda deixa enviar texto livre, e
+    assim caminhos mais fundos que a varredura continuam valendo). O relay só confere formato (não vazio, sem
+    caractere de controle, até 1024); quem decide é o agente. Vai como `cwd`, sem `create`.
+  - `nova_pasta` é o nome da pasta a **criar** dentro da pasta dev (`meu-app`, `clientes/app`), sem autocomplete. Vai como
+    `cwd` mais `create: true`. `projeto` e `nova_pasta` juntos são erro (efêmero: "use projeto (pasta existente) ou
+    nova_pasta (pasta a criar), não os dois"). `nova_pasta` com pasta que **já existe** também é erro, devolvido pelo
+    agente ("a pasta X já existe; use projeto:X para abri-la"); não há mais abertura silenciosa da pasta existente.
+    Não existe mais a opção `criar`: a intenção de criar sem nome deixou de ser possível, porque o nome é o próprio campo.
+  - Sem `projeto` e sem `nova_pasta`: a própria primeira pasta dev (mesmo havendo projetos explícitos); senão o primeiro projeto
     explícito; senão `noDevRootText(os)` (em `@global-agents/protocol`, o mesmo texto no relay e no agente) com o
     comando do `os` da máquina: Linux `global-agents install --dev-root ~/dev` e
     `systemctl --user restart global-agents`; macOS o mesmo `install` e "reinicie o agente"; Windows
     `.\deploy\agent\install-windows.ps1 -DevRoot C:\dev` (o script reinicia o agente sozinho).
-  - Autocomplete: no Linux o eco diferencia maiúsculas (`Gestai` ≠ `gestai`), no Windows não; sugestão absoluta com
-    mais de 100 caracteres vai como caminho relativo à primeira raiz (ou some, se estiver fora dela); agente com
-    `devRoots: []` só ecoa caminho absoluto ou com `~`.
+  - Autocomplete de `projeto`: sugestão absoluta com mais de 100 caracteres vai como caminho relativo à primeira raiz
+    (ou some, se estiver fora dela).
   - As raízes de cada máquina ficam também em `machines.dev_roots` (JSON, migração 2), para o `/novo` saber que o
     agente é novo mesmo logo após um restart do relay; o valor vale até o próximo hello.
   - Objetivo: informada a raiz uma vez, nenhum projeto precisa ser cadastrado; qualquer subpasta dela vale, inclusive
     digitada à mão e mais funda que a varredura.
-  - `criar:true` vira `create: true`. No agente (fronteira de confiança): permitido se está na lista `projects` ou dentro
+  - No agente (fronteira de confiança): permitido se está na lista `projects` ou dentro
     de uma pasta dev, medido pelo `realpath` do ancestral existente mais próximo contra o `realpath` da raiz (sem
     diferenciar maiúsculas no Windows; symlink que sai da raiz é negado; a própria raiz vale). Pasta inexistente só é
     criada com `create`, dentro de uma pasta dev, e cada segmento novo casa `^[A-Za-z0-9][A-Za-z0-9._-]*$` (no Windows
     também sem nomes reservados como `CON`/`NUL`/`COM1` e sem ponto final). `~` digitado é o home do agente. O ancestral
-    existente precisa ser pasta. A contenção é conferida de novo imediatamente antes de cada `claude --bg`.
+    existente precisa ser pasta. `create` com pasta existente é erro. A contenção é conferida de novo imediatamente antes de cada `claude --bg`.
   - Confiança do Claude Code: pasta nova sem git herda a confiança de um ancestral confiável; repositório git não (a
     raiz do repositório é a fronteira). Se o `--bg` recusar ("Workspace not trusted") uma pasta dentro de pasta dev, o
     agente grava `projects[<pasta>].hasTrustDialogAccepted: true` no `~/.claude.json` e tenta uma vez mais; fora das
@@ -194,7 +199,7 @@ build (só `-SkipBuild` pula) e reinicia a tarefa; o fluxo de atualização é `
     qualquer pasta dentro da raiz, não só as criadas pelo `/novo`, inclusive repositórios de terceiros clonados ali,
     cujos hooks (`.claude/settings.json`) e `.mcp.json` passam a rodar sem o diálogo. É a vontade explícita do
     Leonardo ("tudo dentro dessa pasta o bot vai ter permissão") e está destacada em `install.md` e `windows.md`.
-  - Agente anterior às pastas dev (hello sem `devRoots`): o relay só aceita os `projects` do hello e recusa `criar`,
+  - Agente anterior às pastas dev (hello sem `devRoots`): o relay só aceita os `projects` do hello e recusa `nova_pasta`,
     porque esse agente não confere a pasta.
 - `/sessoes` lista as sessões vivas da máquina. `/parar` dentro da thread → `session.stop`.
 - Máquina conecta pela primeira vez → cria o canal `#<machine>` na categoria configurada.
