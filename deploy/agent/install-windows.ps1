@@ -2,13 +2,17 @@
 .SYNOPSIS
   Instala o agente global-agents no Windows (rodar dentro do repositório clonado, como o usuário logado).
 .EXAMPLE
-  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint AA:BB:... -Project C:\dev\meu-projeto
+  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint AA:BB:... -DevRoot C:\dev
+.EXAMPLE
+  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint AA:BB:... -Project C:\dev\meu-projeto -DevRoot C:\dev,D:\trabalho
 #>
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^wss?://')][string]$Relay,
   [System.Security.SecureString]$Token,
   [string]$Fingerprint,
   [string[]]$Project = @(),
+  # Pastas raiz de desenvolvimento: tudo dentro delas pode virar sessão pelo /novo (inclusive pasta nova, criar:true).
+  [string[]]$DevRoot = @(),
   [switch]$SkipBuild
 )
 $ErrorActionPreference = 'Stop'
@@ -54,6 +58,7 @@ Write-Host '== 3. configuração, hooks e inicialização no logon (Agendador de
 $installArgs = @($cli, 'install', '--relay', $Relay, '--service', '--apply')
 if ($Fingerprint) { $installArgs += @('--fingerprint', $Fingerprint) }
 foreach ($p in $Project) { $installArgs += @('--project', $p) }
+foreach ($d in $DevRoot) { $installArgs += @('--dev-root', $d) }
 # O token só existe no ambiente durante este passo (pnpm install/build não o herdam).
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Token)
 try {

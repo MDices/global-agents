@@ -123,11 +123,26 @@ read -rsp 'token: ' GLOBAL_AGENTS_TOKEN; echo; export GLOBAL_AGENTS_TOKEN   # n�
 node apps/agent/dist/cli.js install \
   --relay wss://<ip-da-vps>:8443/ws \
   --fingerprint '<AA:BB:…>' \
-  --project ~/dev/meu-projeto \
+  --dev-root ~/dev \
   --service
 unset GLOBAL_AGENTS_TOKEN
 ```
-(`--token <token>` também funciona, mas fica no histórico do shell e aparece no `ps`; `--project` pode repetir.) Isso grava a config em `~/.global-agents`, copia os scripts de hook e instala os hooks em `~/.claude/settings.json`.
+(`--token <token>` também funciona, mas fica no histórico do shell e aparece no `ps`; `--dev-root` e `--project` podem repetir.) Isso grava a config em `~/.global-agents`, copia os scripts de hook e instala os hooks em `~/.claude/settings.json`.
+
+### Pastas dev (`--dev-root`)
+
+Cada `--dev-root <pasta>` é uma **pasta raiz de desenvolvimento**: tudo dentro dela pode virar sessão pelo `/novo` do Discord. O agente lista sozinho as subpastas de 1º nível e os repositórios git do 2º nível (sem pastas ocultas, `node_modules`, `dist` e afins, até 200, sem seguir symlinks) e manda essa lista ao relay ao conectar e quando ela muda (varredura a cada 5 min); são as sugestões do autocomplete do `projeto`.
+
+No `/novo`, `projeto` aceita uma sugestão, um caminho **relativo à primeira pasta dev** (ex.: `gestai`, `work/app-novo`) ou um caminho absoluto. Quem decide é o agente: só abre sessão em pasta **dentro** de uma pasta dev (comparando o caminho real, então um symlink que sai da pasta dev é recusado) ou em um `--project` explícito. Pasta que ainda não existe só é criada com `criar:true` no `/novo`, e cada nome novo precisa começar com letra ou número e ter só letras, números, `.`, `_` e `-`. Sem `projeto`, o `/novo` usa o primeiro `--project` e, sem ele, a primeira pasta dev.
+
+Confiança do Claude Code: uma pasta nova sem git dentro de uma pasta dev já confiável herda a confiança dela. Quando o `claude --bg` recusa a pasta ("Workspace not trusted", por exemplo num repositório git que nunca foi aberto, ou numa pasta dev que nunca foi aberta), o agente marca essa pasta como confiável em `~/.claude.json` (`projects[<pasta>].hasTrustDialogAccepted`, o mesmo campo que o Claude Code grava ao aceitar o diálogo) e tenta uma vez mais. Isso só acontece para pastas dentro de uma pasta dev; fora delas a sessão falha com a instrução de abrir `claude` na pasta uma vez.
+
+Para acrescentar ou trocar as pastas dev depois, não precisa do token nem do relay de novo: com a config já gravada, `--relay`, `--token` e `--fingerprint` são opcionais e o que não for passado fica como estava.
+```bash
+node apps/agent/dist/cli.js install --dev-root ~/dev --dev-root ~/trabalho
+systemctl --user restart global-agents
+```
+`--dev-root` e `--project` substituem a lista inteira correspondente (repita a pasta que já existia para mantê-la). `status` mostra a linha `raízes dev:`.
 
 O `--service` grava a unidade systemd de usuário e **imprime** os comandos para ativá-la (`install` sem `--service` só grava config e hooks; reinstalar mantém o que não foi passado).
 Rode os comandos `systemctl --user …` e `loginctl enable-linger …` que ele imprimir (o linger mantém o agente de pé sem sessão aberta). Sem `--service`, use `node apps/agent/dist/cli.js run` num terminal.
@@ -147,7 +162,7 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 - [ ] `doctor` sem ❌ e `status` com `agente: rodando` em cada máquina.
 - [ ] No Discord, o **canal da máquina** aparece (dentro da categoria criada pelo relay).
 - [ ] Numa sessão do Claude Code (`claude --bg --name teste`), uma **thread** surge com o prompt e a resposta.
-- [ ] `/novo` cria uma sessão nova a partir do Discord.
+- [ ] `/novo` cria uma sessão nova a partir do Discord; `/novo projeto:teste-ga criar:true` cria a pasta dentro da pasta dev.
 - [ ] Uma ferramenta que exige permissão gera o **card de permissão**; Aprovar/Negar chega à sessão.
 - [ ] `docker compose logs relay` sem erros repetidos.
 
@@ -164,5 +179,8 @@ Veja [windows.md](./windows.md) (Agendador de Tarefas por usuário, instalador P
 | **Porta 8443 não responde de fora** | Confira `sudo iptables -L INPUT --line-numbers -n` (a regra deve vir antes do REJECT) e a security list da Oracle. |
 | **Rate limit do Discord** | O relay enfileira por canal e respeita o `Retry-After`; as mensagens só demoram. Nome de thread e tópico do canal mudam no máximo 1× a cada 5 min (300 s): o Discord só aceita ~2 edições por canal a cada 10 min, então o emoji de estado pode demorar a acompanhar. |
 | **Thread arquivada** | Nada a fazer: uma mensagem nova desarquiva a thread automaticamente. |
+| **`esta máquina não tem pasta dev`** no `/novo` | O agente foi instalado sem `--dev-root` nem `--project`. Rode `install --dev-root <pasta>` (sem token) e reinicie o agente. |
+| **`pasta não existe; use criar:true…`** | A pasta pedida não existe; repita o `/novo` com `criar:true` (só funciona dentro de uma pasta dev). |
+| **`… está fora das pastas dev desta máquina`** | O caminho (ou o destino real de um symlink) fica fora de toda pasta dev e não é um `--project`. Use um caminho dentro de uma pasta dev ou acrescente a pasta com `install --dev-root`. |
 | **Injeção falhou** (❌ na mensagem) | A sessão morreu ou o socket sumiu; o relay sugere `/novo`. |
 | **Permissão sem resposta** | Após 30 min o card marca "expirou" e a permissão é negada. |
