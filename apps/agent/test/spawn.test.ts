@@ -110,6 +110,29 @@ describe("spawnSession", () => {
       expect(trust).not.toHaveBeenCalled();
     });
 
+    it("trust lança (EPERM, disco) → loga e cai no WorkspaceNotTrustedError com a instrução, sem erro cru", async () => {
+      const run = vi.fn().mockResolvedValue(NOT_TRUSTED);
+      const log = vi.fn();
+      const { inventory } = fakeInventory();
+      const p = spawnSession({ ...input, trustPaths: ["/d/app"] }, { run, inventory, log, trust: () => Promise.reject(new Error("EPERM: operation not permitted, rename")) });
+      await expect(p).rejects.toBeInstanceOf(WorkspaceNotTrustedError);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("EPERM"));
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("guard roda antes de cada --bg (inclusive na nova tentativa); se rejeitar, nada é aberto", async () => {
+      const order: string[] = [];
+      const run = vi.fn(() => { order.push("bg"); return Promise.resolve(order.length < 3 ? NOT_TRUSTED : ok(OK_OUT)); });
+      const guard = vi.fn(() => { order.push("guard"); return Promise.resolve(); });
+      const { inventory } = fakeInventory();
+      await spawnSession({ ...input, trustPaths: ["/d/app"], guard }, { run, inventory, trust: () => Promise.resolve(true) });
+      expect(order).toEqual(["guard", "bg", "guard", "bg"]);
+      const run2 = vi.fn();
+      await expect(spawnSession({ ...input, guard: () => Promise.reject(new Error("a pasta mudou")) }, { run: run2, inventory }))
+        .rejects.toThrow("a pasta mudou");
+      expect(run2).not.toHaveBeenCalled();
+    });
+
     it("pasta já confiável → não grava nada", async () => {
       const run = vi.fn().mockResolvedValue(ok(OK_OUT));
       const trust = vi.fn(() => Promise.resolve(true));

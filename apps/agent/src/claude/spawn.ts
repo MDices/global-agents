@@ -29,6 +29,11 @@ export interface SpawnInput {
    * confiáveis (`deps.trust`) e o `--bg` é tentado mais uma vez. Ausente ou vazio: nunca grava confiança.
    */
   trustPaths?: string[];
+  /**
+   * Conferência feita imediatamente antes de cada `claude --bg` (a pasta ainda está dentro da raiz dev?): estreita a
+   * janela entre a checagem do `resolveWorkspace` e o uso. Rejeitar aborta sem abrir sessão.
+   */
+  guard?: () => Promise<void>;
 }
 
 async function isDirectory(path: string): Promise<boolean> {
@@ -48,10 +53,16 @@ const NOT_TRUSTED = "Workspace not trusted";
 
 export async function spawnSession(
   input: SpawnInput,
-  deps: { run: SpawnRun; inventory: Pick<Inventory, "waitFor">; trust?: (paths: string[]) => Promise<boolean> },
+  deps: {
+    run: SpawnRun;
+    inventory: Pick<Inventory, "waitFor">;
+    trust?: (paths: string[]) => Promise<boolean>;
+    log?: (msg: string) => void;
+  },
 ): Promise<{ sessionId: string; bgId: string }> {
   if (!(await isDirectory(input.cwd))) throw new Error(`pasta não encontrada: ${input.cwd}`);
   const bg = async (): Promise<string> => {
+    await input.guard?.();
     const r = await deps.run(["--bg", "--name", input.name, "--permission-mode", input.permissionMode, "--", input.prompt], {
       cwd: input.cwd,
       timeoutMs: 60000,
@@ -61,8 +72,15 @@ export async function spawnSession(
   let out = await bg();
   // Pasta nova sem git herda a confiança da raiz dev; repositório git (ou raiz não confiável) não herda.
   const trustPaths = input.trustPaths ?? [];
-  if (out.includes(NOT_TRUSTED) && trustPaths.length > 0 && deps.trust !== undefined && (await deps.trust(trustPaths))) {
-    out = await bg();
+  if (out.includes(NOT_TRUSTED) && trustPaths.length > 0 && deps.trust !== undefined) {
+    let granted = false;
+    try {
+      granted = await deps.trust(trustPaths);
+    } catch (e) {
+      // falha ao gravar a confiança não vira erro cru no Discord: cai na instrução de confiança abaixo
+      (deps.log ?? console.warn)(`global-agents: falha ao gravar a confiança do Claude Code: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (granted) out = await bg();
   }
   if (out.includes(NOT_TRUSTED)) throw new WorkspaceNotTrustedError(input.cwd);
   const bgId = parseBgId(out);
