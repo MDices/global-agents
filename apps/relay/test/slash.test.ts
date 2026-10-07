@@ -296,6 +296,18 @@ describe("/novo", () => {
     expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: CH, name: "🟢 roda-os-testes" }]);
   });
 
+  it("session.list antes do ack não cria thread; o ack do /novo cria", async () => {
+    const i = command("novo", { prompt: "roda os testes" });
+    await slash.onInteraction(i);
+    hub.emit("event", M, ev("session.list", { sessions: [{ sessionId: "sess-1", name: "roda-os-testes", cwd: PROJECTS[0] ?? "", kind: "background", bgId: "b91e04d7" }] }));
+    await settle();
+    expect(port.of("createThread")).toEqual([]);
+    await ackOf(i.id, { sessionId: "sess-1", bgId: "b91e04d7" });
+    await settle();
+    expect(port.of("createThread")).toEqual([{ op: "createThread", channelId: CH, name: "🟢 roda-os-testes" }]);
+    expect(i.edits).toEqual([{ content: `✅ Sessão criada: <#${db.sessions.get("sess-1")?.threadId}>` }]);
+  });
+
   it("evento antes do ack: o cabeçalho é atualizado com bgId, nome e a 'sessão em background'", async () => {
     const i = command("novo", { prompt: "oi" });
     await slash.onInteraction(i);
@@ -704,7 +716,7 @@ describe("/sessoes", () => {
     const d = embed?.description ?? "";
     expect(d).toContain("🟢 **relatorio-inadimplencia** · <#th-9>");
     expect(d).toContain("`~/dev/work/gestai` · há 8 min · `claude attach b91e04d7`");
-    expect(d).toContain("🟡 **correcoes-bugs**");
+    expect(d).toContain("🟡 **correcoes-bugs** · sem atividade ainda\n");
     expect(d).toContain("há 2 h");
     expect(d).not.toContain("nao-aparece");
     expect(embed?.footer).toBe("atualizado às 15:10 · filtro de conta desligado");
@@ -990,14 +1002,14 @@ describe("/filtro", () => {
 
     // mesma conta do filtro (sem diferenciar maiúsculas) → aparece
     hub.emit("event", M, hello("Trabalho@Exemplo.com.br"));
-    hub.emit("event", M, ev("session.list", { sessions: [{ sessionId: "s2", name: "b", cwd: "~/x", kind: "interactive" }] }));
+    hub.emit("event", M, ev("turn.reply", { sessionId: "s2", text: "oi" }));
     await settle();
     expect(port.of("createThread")).toHaveLength(1);
 
     hub.emit("event", M, hello("pessoal@exemplo.com.br"));
     const off = command("filtro", { sub: "desligar" });
     await slash.onInteraction(off);
-    hub.emit("event", M, ev("session.list", { sessions: [{ sessionId: "s3", name: "c", cwd: "~/x", kind: "interactive" }] }));
+    hub.emit("event", M, ev("turn.reply", { sessionId: "s3", text: "oi" }));
     await settle();
     expect(db.machines.getByName(M)?.filterAccount).toBeNull();
     expect(off.replies).toEqual([{ view: { content: "🔊 Filtro desligado. Todas as sessões da máquina voltam a aparecer, de qualquer conta." }, ephemeral: false }]);

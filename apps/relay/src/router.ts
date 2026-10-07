@@ -62,6 +62,12 @@ export function machineChannelResolver(db: Db, port: DiscordPort): (machine: str
   };
 }
 
+/** Último segmento do caminho, com `/` ou `\\` (o agente pode ser Windows): o nome da sessão quando nada melhor chegou. */
+export function cwdName(cwd: string): string {
+  const parts = cwd.split(/[\\/]+/).filter((p) => p !== "");
+  return parts.at(-1) ?? cwd;
+}
+
 /** Estado do emoji a partir do `SessionInfo` do `session.list`; `undefined` quando a lista não diz nada. */
 export function stateFromInfo(s: SessionInfo): SessionState | undefined {
   if (s.state === "failed") return "error";
@@ -214,34 +220,54 @@ export function createRouter(deps: RouterDeps): Router {
     return Promise.resolve();
   };
 
-  const onSessionList = async (machine: string, e: EventOf<"session.list">): Promise<void> => {
+  /**
+   * O inventário sozinho não cria thread: sessão aberta e nunca usada não deve deixar thread vazia no canal. Ele só
+   * alimenta o banco (o `/sessoes` lista todas) e atualiza nome, cabeçalho e estado de threads que já existem. A
+   * thread nasce no primeiro evento de atividade (prompt, resposta, notificação, permissão, time) ou no ack do `/novo`.
+   */
+  const onSessionList = (machine: string, e: EventOf<"session.list">): Promise<void> => {
     for (const s of e.sessions) {
       if (ownedElsewhere(machine, s.sessionId, e.type)) continue;
       const state = stateFromInfo(s);
-      const threadId = await threads.ensureThread(machine, {
-        sessionId: s.sessionId, name: s.name, cwd: s.cwd,
-        ...(s.bgId !== undefined ? { bgId: s.bgId } : {}),
-        ...(state !== undefined ? { state } : {}),
-      });
-      threads.rename(s.sessionId, s.name);
-      threads.updateHeader(s.sessionId, { name: s.name, cwd: s.cwd, ...(s.bgId !== undefined ? { bgId: s.bgId } : {}) });
-      if (state !== undefined) threads.setState(threadId, state);
+      // Antes do upsert: a thread reencontrada no banco é registrada com o nome antigo, então o novo vira renomeação.
+      const threadId = threads.adopt(s.sessionId);
       db.sessions.upsert({
         sessionId: s.sessionId, machine, name: s.name, cwd: s.cwd, updatedAt: Date.now(),
         state: state ?? db.sessions.get(s.sessionId)?.state ?? "done",
         ...(s.bgId !== undefined ? { bgId: s.bgId } : {}),
       });
+      if (threadId === undefined) continue;
+      threads.rename(s.sessionId, s.name);
+      threads.updateHeader(s.sessionId, { name: s.name, cwd: s.cwd, ...(s.bgId !== undefined ? { bgId: s.bgId } : {}) });
+      if (state !== undefined) threads.setState(threadId, state);
     }
+    return Promise.resolve();
   };
 
+  /**
+   * Status vindo dos hooks. `working` (prompt) e `waiting` (notificação) são atividade e criam a thread; `done` vem
+   * do `Stop` (a resposta, postada antes, já criou a thread) ou do `SessionEnd`, e sozinho nunca cria: uma sessão
+   * aberta e fechada sem uso não ganha thread. Sem `name` (agente novo que só sabe o nome da pasta), o nome já
+   * conhecido fica.
+   */
   const onStatus = async (machine: string, e: EventOf<"session.status">): Promise<void> => {
-    const threadId = await threads.ensureThread(machine, { sessionId: e.sessionId, name: e.name, cwd: e.cwd, state: e.state });
-    threads.rename(e.sessionId, e.name);
-    // O cabeçalho da thread não recebe nada do hook: o `name` cai no nome da pasta quando o inventário ainda não
-    // conhece a sessão, e o `cwd` é o corrente (um `cd` o faria alternar com o do inventário). Nome, pasta e `bgId`
-    // vêm do ack do `/novo` e do `session.list`.
-    threads.setState(threadId, e.state);
-    db.sessions.upsert({ sessionId: e.sessionId, machine, name: e.name, cwd: e.cwd, state: e.state, updatedAt: Date.now() });
+    const known = db.sessions.get(e.sessionId);
+    const name = e.name ?? known?.name ?? undefined;
+    let threadId = threads.adopt(e.sessionId);
+    if (threadId === undefined && e.state !== "done") {
+      threadId = await threads.ensureThread(machine, {
+        sessionId: e.sessionId, name: name ?? cwdName(e.cwd), cwd: e.cwd, state: e.state,
+      });
+    }
+    if (threadId !== undefined) {
+      if (e.name !== undefined) threads.rename(e.sessionId, e.name);
+      // O cabeçalho da thread não recebe nada do hook: o `cwd` é o corrente (um `cd` o faria alternar com o do
+      // inventário). Nome, pasta e `bgId` vêm do ack do `/novo` e do `session.list`.
+      threads.setState(threadId, e.state);
+    }
+    db.sessions.upsert({
+      sessionId: e.sessionId, machine, name: name ?? cwdName(e.cwd), cwd: e.cwd, state: e.state, updatedAt: Date.now(),
+    });
   };
 
   const onPrompt = async (machine: string, e: EventOf<"turn.prompt">): Promise<void> => {
