@@ -35,8 +35,9 @@ No `/novo`, `projeto` aceita uma sugestão do autocomplete (subpastas e reposit�
 
 > **Atenção: pasta dev = "tudo aqui é confiável para o Claude Code".** Qualquer pasta dentro de uma pasta dev pode ganhar a confiança do Claude Code automaticamente quando uma sessão é aberta nela pelo Discord, inclusive um repositório de terceiros clonado ali e nunca aberto. Confiar numa pasta libera o que ela traz: hooks em `.claude/settings.json`, servidores MCP de `.mcp.json` e afins passam a rodar sem o diálogo de confiança. Não use como pasta dev um lugar onde você clona código em que não confia; clone esse código fora das pastas dev.
 
-Para acrescentar ou trocar as pastas dev depois, rode o próprio instalador só com `-DevRoot`. Com a config já gravada ele não pede token nem `-Relay`, pula `pnpm install` e o build (a não ser que falte o `dist`) e reinicia o agente sozinho:
+Para atualizar o agente e acrescentar ou trocar as pastas dev, o fluxo é `git pull` seguido do próprio instalador só com `-DevRoot`. Com a config já gravada ele não pede token nem `-Relay`; refaz `pnpm install` e o build (só `-SkipBuild` pula esse passo) e reinicia o agente sozinho:
 ```powershell
+git pull
 .\deploy\agent\install-windows.ps1 -DevRoot C:\dev,D:\trabalho
 ```
 O mesmo vale para `-Project`. Sem o script, dá para fazer à mão: `node apps\agent\dist\cli.js install --dev-root C:\dev` e depois `schtasks /End /TN global-agents; schtasks /Run /TN global-agents`. `-DevRoot`/`--dev-root` substitui a lista inteira (repita as pastas que quer manter); não passar nenhum mantém a lista, e `--no-dev-root` (na CLI) apaga todas. `status` mostra a linha `raízes dev:`.

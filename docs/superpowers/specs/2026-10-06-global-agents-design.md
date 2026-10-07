@@ -129,8 +129,8 @@ config editada à mão), `port` (padrão 48476). CLI:
 `global-agents install | uninstall | run | status | doctor`. `install --dev-root <dir>` (repetível) grava as pastas dev;
 com config já gravada, `--relay`, token e `--fingerprint` são opcionais (usa os salvos), e `--project`/`--dev-root`
 substituem a lista correspondente só quando passados (`--no-dev-root` apaga as raízes). No Windows,
-`install-windows.ps1 -DevRoot <dir>` sobre uma instalação existente não pede token nem `-Relay`, pula o build se o `dist`
-existe e reinicia a tarefa. `doctor` roda os checks dos spikes (versão do Claude,
+`install-windows.ps1 -DevRoot <dir>` sobre uma instalação existente não pede token nem `-Relay`, refaz `pnpm install` e o
+build (só `-SkipBuild` pula) e reinicia a tarefa; o fluxo de atualização é `git pull` seguido desse comando. `doctor` roda os checks dos spikes (versão do Claude,
 `agents --json`, socket/pipe acessível, hooks presentes).
 
 ## 6. Relay + bot (`apps/relay`)

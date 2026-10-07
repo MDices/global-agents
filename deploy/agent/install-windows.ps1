@@ -7,7 +7,7 @@
   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint AA:BB:... -Project C:\dev\meu-projeto -DevRoot C:\dev,D:\trabalho
 .EXAMPLE
   .\deploy\agent\install-windows.ps1 -DevRoot C:\dev
-  Com o agente já instalado: troca só as pastas dev, sem pedir token nem refazer o build, e reinicia o agente.
+  Com o agente já instalado (depois de um git pull): refaz o build, troca as pastas dev sem pedir token e reinicia o agente.
 .NOTES
   Sem config gravada (%USERPROFILE%\.global-agents\config.json), -Relay é obrigatório e o token é pedido. Com config,
   -Relay, -Token e -Fingerprint são opcionais: o que não for passado fica como estava.
@@ -32,8 +32,6 @@ if (-not $hasConfig -and -not $Relay) { throw "sem config em ${configFile}: a pr
 # Token: o passado em -Token, ou o de GLOBAL_AGENTS_TOKEN (o node herda), ou pedido só na primeira instalação.
 $envToken = -not [string]::IsNullOrEmpty($env:GLOBAL_AGENTS_TOKEN)
 if (-not $Token -and -not $envToken -and -not $hasConfig) { $Token = Read-Host -AsSecureString 'Token do relay' }
-# Só -DevRoot/-Project sobre uma instalação existente: nada de relay, token ou certificado novo.
-$onlyFolders = $hasConfig -and -not $Relay -and -not $Token -and -not $envToken -and -not $Fingerprint
 
 function Get-VersionFrom([string]$text) {
   $m = [regex]::Match($text, '\d+\.\d+\.\d+')
@@ -57,10 +55,8 @@ if ($claude -lt [version]'2.1.234') { throw "Claude Code $claude encontrado; é 
 Write-Host "Claude Code $claude ok"
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) { throw 'pnpm não encontrado (npm i -g pnpm ou corepack enable)' }
 
-$cliMissing = -not (Test-Path $cli)
-if ($onlyFolders -and -not $cliMissing -and -not $SkipBuild) {
-  Write-Host '== 2. dependências e build: pulados (só as pastas mudaram e o build já existe)'
-} elseif (-not $SkipBuild) {
+# Sempre refaz dependências e build (a não ser com -SkipBuild): depois de um git pull o dist antigo não serve.
+if (-not $SkipBuild) {
   Write-Host '== 2. dependências e build'
   Push-Location $repo
   try {
