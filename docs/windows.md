@@ -19,7 +19,7 @@ O agente precisa rodar **como o usuário logado**: os named pipes de inbox (`\\.
    ```
 2. Rode o instalador (PowerShell normal, **não** precisa de administrador):
    ```powershell
-   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Fingerprint "<fp>" -Project C:\dev\meu-projeto
+   .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint "<fp>" -Project C:\dev\meu-projeto
    ```
    Se a política de execução bloquear: `powershell -ExecutionPolicy Bypass -File .\deploy\agent\install-windows.ps1 ...`.
    Ele verifica Node/Claude Code, roda `pnpm install` e o build, grava a config e os hooks, registra a tarefa `global-agents` a partir de um XML (`schtasks /Create /TN global-agents /XML ... /F`; gatilho no logon do seu usuário, token interativo, nível limitado, sem limite de tempo, reinício em falha, sem condição de bateria), inicia o agente e roda o `doctor`.

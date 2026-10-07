@@ -2,7 +2,7 @@
 .SYNOPSIS
   Instala o agente global-agents no Windows (rodar dentro do repositório clonado, como o usuário logado).
 .EXAMPLE
-  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443 -Fingerprint AA:BB:... -Project C:\dev\meu-projeto
+  .\deploy\agent\install-windows.ps1 -Relay wss://relay.exemplo:8443/ws -Fingerprint AA:BB:... -Project C:\dev\meu-projeto
 #>
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^wss?://')][string]$Relay,
